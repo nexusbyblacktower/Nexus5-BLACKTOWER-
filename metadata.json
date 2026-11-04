@@ -1,0 +1,6 @@
+{
+  "name": "NEXUS 5.5 | BLACKTOWER Dual-Brain Edition",
+  "description": "Personal AI operating layer and dual-brain agent workspace by BLACKTOWER™ that thinks, plans, executes, and verifies.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
