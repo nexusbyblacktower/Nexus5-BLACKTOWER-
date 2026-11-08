@@ -1,20 +1,56 @@
 import { GoogleGenAI } from '@google/genai';
-import { BrainRoutingDecision, GatewayStatus } from '../src/types/nexus.ts';
+import { BrainRoutingDecision, GatewayStatus, ToolExecutionRecord } from '../src/types/nexus.ts';
 import { sanitizeErrorMessage } from './authService.ts';
+import { executionService } from './executionService.ts';
 import { settingsService } from './settingsService.ts';
+import type { OpenAIToolSchema } from './toolRegistry.ts';
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
+const REQUEST_TIMEOUT_MS = 90_000;
+const MAX_MODEL_CALLS = 5;
+
+export interface ChatToolCall {
+  id: string;
+  type: 'function';
+  function: {
+    name: string;
+    arguments: string;
+  };
+}
 
 export interface OpenRouterMessage {
-  role: 'system' | 'user' | 'assistant';
-  content: string;
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string | null;
+  tool_calls?: ChatToolCall[];
+  tool_call_id?: string;
+  name?: string;
 }
 
 export interface StreamCompletionCallbacks {
   onMetadata?: (decision: BrainRoutingDecision) => void;
   onToken: (token: string) => void;
+  onToolExecution?: (record: ToolExecutionRecord) => void;
   onComplete: (fullText: string, finalDecision: BrainRoutingDecision) => void;
   onError: (errorMessage: string, finalDecision: BrainRoutingDecision) => void;
+}
+
+interface StreamResult {
+  text: string;
+  toolCalls: ChatToolCall[];
+}
+
+interface RunState {
+  toolsExecuted: boolean;
+}
+
+function parseToolArguments(raw: string): Record<string, unknown> {
+  if (!raw || !raw.trim()) return {};
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
 }
 
 export class OpenRouterClient {
@@ -23,33 +59,30 @@ export class OpenRouterClient {
     const openRouterKey = process.env.OPENROUTER_API_KEY?.trim();
     const geminiKey = process.env.GEMINI_API_KEY?.trim();
 
+    const hasOpenRouterKey = Boolean(openRouterKey && openRouterKey !== 'YOUR_OPENROUTER_API_KEY');
+    const hasGeminiKey = Boolean(geminiKey && geminiKey !== 'MY_GEMINI_API_KEY');
+
     return {
-      openRouterConfigured: Boolean(
-        openRouterKey && openRouterKey !== 'YOUR_OPENROUTER_API_KEY'
-      ),
-      openRouterEndpoint: OPENROUTER_API_URL,
-      geminiFallbackAvailable: Boolean(geminiKey && geminiKey !== 'MY_GEMINI_API_KEY'),
+      chatGatewayReady:
+        hasOpenRouterKey || (settings.enableVerifiedFallback && hasGeminiKey),
+      toolCallingEnabled: hasOpenRouterKey,
       configuredModels: {
         flash: settings.flashModelId,
         reasoning: settings.reasoningModelId,
         fallback: settings.fallbackModelId,
       },
-      persistenceLayer: {
-        engine: 'Server-Side JSON Document Store',
-        storagePath: '/data/nexus_conversations.json',
-        persistentAcrossRestarts: true,
-      },
     };
   }
 
   /**
-   * Streams completion from OpenRouter (https://openrouter.ai/api/v1/chat/completions).
-   * If the primary model ID fails on OpenRouter or OPENROUTER_API_KEY is not configured,
-   * handles fallback transparently and NEVER claims a different model performed the work.
+   * Streams a chat completion and runs a real function-calling loop:
+   * the model may request tools, the server executes them, and the result is
+   * fed back until the model produces its final answer.
    */
   public async streamChatCompletion(params: {
     messages: OpenRouterMessage[];
     decision: BrainRoutingDecision;
+    tools?: OpenAIToolSchema[];
     temperature?: number;
     maxTokens?: number;
     signal?: AbortSignal;
@@ -57,123 +90,107 @@ export class OpenRouterClient {
   }): Promise<void> {
     const settings = settingsService.getSettings();
     const openRouterKey = process.env.OPENROUTER_API_KEY?.trim();
-    const hasOpenRouterKey = Boolean(
-      openRouterKey && openRouterKey !== 'YOUR_OPENROUTER_API_KEY'
-    );
+    const hasOpenRouterKey = Boolean(openRouterKey && openRouterKey !== 'YOUR_OPENROUTER_API_KEY');
 
     const temperature = params.temperature ?? settings.temperature;
     const maxTokens = params.maxTokens ?? settings.maxOutputTokens;
-    const currentDecision: BrainRoutingDecision = { ...params.decision };
+    const decision: BrainRoutingDecision = { ...params.decision };
+    const runState: RunState = { toolsExecuted: false };
 
-    // 1. Primary path: OpenRouter with requested model ID
     if (hasOpenRouterKey) {
       try {
-        await this.invokeOpenRouterStream({
+        await this.runWithTools({
           apiKey: openRouterKey!,
-          modelId: currentDecision.requestedModelId,
+          modelId: decision.requestedModelId,
           messages: params.messages,
+          tools: params.tools,
           temperature,
           maxTokens,
           signal: params.signal,
-          onStart: () => {
-            params.callbacks.onMetadata?.(currentDecision);
-          },
-          onToken: params.callbacks.onToken,
-          onDone: (fullText) => {
-            params.callbacks.onComplete(fullText, currentDecision);
-          },
+          callbacks: params.callbacks,
+          decision,
+          state: runState,
+          onStart: () => params.callbacks.onMetadata?.(decision),
         });
         return;
       } catch (primaryErr) {
+        if (params.signal?.aborted) return;
         const primaryErrMsg = sanitizeErrorMessage(primaryErr);
 
-        // If user aborted, stop immediately
-        if (params.signal?.aborted) {
+        // Never retry automatically once a tool already ran: that could repeat a
+        // real action such as sending an email or creating an event.
+        if (runState.toolsExecuted) {
+          params.callbacks.onError(primaryErrMsg, decision);
           return;
         }
 
-        // 2. If OpenRouter is configured, try OpenRouter fallback model if enabled
         if (settings.enableVerifiedFallback && settings.fallbackModelId) {
           try {
-            currentDecision.fallbackTriggered = true;
-            currentDecision.gatewayUsed = 'fallback_openrouter';
-            currentDecision.executedModelId = settings.fallbackModelId;
-            currentDecision.fallbackReason = `Primary model "${currentDecision.requestedModelId}" unavailable on OpenRouter (${primaryErrMsg}). Routed to OpenRouter fallback model "${settings.fallbackModelId}".`;
+            decision.fallbackTriggered = true;
+            decision.gatewayUsed = 'fallback_openrouter';
+            decision.executedModelId = settings.fallbackModelId;
+            decision.fallbackReason = `Primary model "${decision.requestedModelId}" was unavailable (${primaryErrMsg}).`;
 
-            await this.invokeOpenRouterStream({
+            await this.runWithTools({
               apiKey: openRouterKey!,
               modelId: settings.fallbackModelId,
               messages: params.messages,
+              tools: params.tools,
               temperature,
               maxTokens,
               signal: params.signal,
-              onStart: () => {
-                params.callbacks.onMetadata?.(currentDecision);
-              },
-              onToken: params.callbacks.onToken,
-              onDone: (fullText) => {
-                params.callbacks.onComplete(fullText, currentDecision);
-              },
+              callbacks: params.callbacks,
+              decision,
+              state: runState,
+              onStart: () => params.callbacks.onMetadata?.(decision),
             });
             return;
           } catch (fallbackErr) {
-            const fbErrMsg = sanitizeErrorMessage(fallbackErr);
-            // Fall through to Gemini fallback if enabled, or report error
-            if (!settings.enableVerifiedFallback) {
+            if (params.signal?.aborted) return;
+            if (settings.enableVerifiedFallback && process.env.GEMINI_API_KEY) {
+              // Fall through to the verified Gemini fallback below.
+            } else {
               params.callbacks.onError(
-                `OpenRouter error for "${currentDecision.requestedModelId}": ${primaryErrMsg} (Fallback "${settings.fallbackModelId}" also failed: ${fbErrMsg})`,
-                currentDecision
+                `${primaryErrMsg} (fallback model also failed: ${sanitizeErrorMessage(fallbackErr)})`,
+                decision
               );
               return;
             }
           }
         } else {
-          params.callbacks.onError(
-            `OpenRouter request failed for model "${currentDecision.requestedModelId}": ${primaryErrMsg}`,
-            currentDecision
-          );
+          params.callbacks.onError(primaryErrMsg, decision);
           return;
         }
       }
     }
 
-    // 3. Verified Server-Side Fallback Gateway (when OPENROUTER_API_KEY is missing or OpenRouter models failed and fallback is enabled)
+    // Verified server-side fallback used only when OpenRouter cannot be used at all.
     const geminiKey = process.env.GEMINI_API_KEY?.trim();
     const hasGeminiKey = Boolean(geminiKey && geminiKey !== 'MY_GEMINI_API_KEY');
 
     if (settings.enableVerifiedFallback && hasGeminiKey) {
-      const fallbackGeminiModel = 'gemini-3.8-flash';
-      currentDecision.fallbackTriggered = true;
-      currentDecision.gatewayUsed = 'fallback_gemini';
-      currentDecision.executedModelId = `${fallbackGeminiModel} (Verified Fallback Gateway)`;
-      currentDecision.fallbackReason = hasOpenRouterKey
-        ? `Requested OpenRouter model "${currentDecision.requestedModelId}" was unavailable. Executed via verified server-side fallback (${fallbackGeminiModel}).`
-        : `OPENROUTER_API_KEY is not set in server environment. Executed via verified server-side fallback (${fallbackGeminiModel}) while preserving ${currentDecision.selectedBrain} routing context.`;
+      const fallbackGeminiModel = 'gemini-2.5-flash';
+      decision.fallbackTriggered = true;
+      decision.gatewayUsed = 'fallback_gemini';
+      decision.executedModelId = fallbackGeminiModel;
+      decision.fallbackReason = hasOpenRouterKey
+        ? `Requested model "${decision.requestedModelId}" was unavailable.`
+        : `The primary chat gateway is not configured.`;
 
-      params.callbacks.onMetadata?.(currentDecision);
+      params.callbacks.onMetadata?.(decision);
 
       try {
-        const ai = new GoogleGenAI({
-          apiKey: geminiKey,
-          httpOptions: {
-            headers: {
-              'User-Agent': 'aistudio-build',
-            },
-          },
-        });
-
+        const ai = new GoogleGenAI({ apiKey: geminiKey });
         const systemMsg = params.messages.find((m) => m.role === 'system')?.content || '';
-        const conversationTranscript = params.messages
-          .filter((m) => m.role !== 'system')
-          .map((m) => `${m.role === 'user' ? 'User' : 'NEXUS'}: ${m.content}`)
+        const transcript = params.messages
+          .filter((m) => m.role === 'user' || m.role === 'assistant')
+          .map((m) => `${m.role === 'user' ? 'User' : 'NEXUS'}: ${m.content ?? ''}`)
           .join('\n\n');
 
         const responseStream = await ai.models.generateContentStream({
           model: fallbackGeminiModel,
-          contents: conversationTranscript || 'Hello',
-          config: {
-            systemInstruction: systemMsg,
-          },
+          contents: transcript || 'Hello',
+          config: { systemInstruction: systemMsg },
         });
 
         let fullText = '';
@@ -186,40 +203,43 @@ export class OpenRouterClient {
           }
         }
 
-        params.callbacks.onComplete(fullText, currentDecision);
+        params.callbacks.onComplete(fullText, decision);
         return;
       } catch (geminiErr) {
         params.callbacks.onError(
-          `OpenRouter key missing and fallback gateway encountered an error: ${sanitizeErrorMessage(geminiErr)}`,
-          currentDecision
+          `The chat gateway could not be reached: ${sanitizeErrorMessage(geminiErr)}`,
+          decision
         );
         return;
       }
     }
 
-    // 4. Neither OpenRouter nor Fallback is available / permitted
     params.callbacks.onError(
-      `OPENROUTER_API_KEY is not configured on the server (and Verified Fallback is disabled). Add OPENROUTER_API_KEY in the Secrets panel to invoke "${currentDecision.requestedModelId}" via https://openrouter.ai/api/v1/chat/completions, or enable Verified Fallback in Settings.`,
-      currentDecision
+      'The chat gateway is not configured on the server. Add the OPENROUTER_API_KEY secret and try again.',
+      decision
     );
   }
 
   /**
-   * Non-streaming completion helper used by internal agent verification/planning steps
+   * Non-streaming completion helper used by internal agent verification steps.
    */
   public async completeOnce(params: {
     messages: OpenRouterMessage[];
     decision: BrainRoutingDecision;
+    tools?: OpenAIToolSchema[];
+    onToolExecution?: (record: ToolExecutionRecord) => void;
   }): Promise<{ text: string; finalDecision: BrainRoutingDecision }> {
     return new Promise((resolve, reject) => {
       let accumulated = '';
       this.streamChatCompletion({
         messages: params.messages,
         decision: params.decision,
+        tools: params.tools,
         callbacks: {
-          onToken: (tok) => {
-            accumulated += tok;
+          onToken: (token) => {
+            accumulated += token;
           },
+          onToolExecution: params.onToolExecution,
           onComplete: (fullText, finalDecision) => {
             resolve({ text: fullText || accumulated, finalDecision });
           },
@@ -231,22 +251,120 @@ export class OpenRouterClient {
     });
   }
 
+  private async runWithTools(params: {
+    apiKey: string;
+    modelId: string;
+    messages: OpenRouterMessage[];
+    tools?: OpenAIToolSchema[];
+    temperature: number;
+    maxTokens: number;
+    signal?: AbortSignal;
+    callbacks: StreamCompletionCallbacks;
+    decision: BrainRoutingDecision;
+    state: RunState;
+    onStart: () => void;
+  }): Promise<void> {
+    const conversation: OpenRouterMessage[] = params.messages.map((message) => ({ ...message }));
+    let accumulated = '';
+    let modelCalls = 0;
+    let metadataSent = false;
+
+    while (true) {
+      modelCalls += 1;
+      const canUseTools = Boolean(params.tools && params.tools.length > 0) && modelCalls < MAX_MODEL_CALLS;
+
+      const result = await this.invokeOpenRouterStream({
+        apiKey: params.apiKey,
+        modelId: params.modelId,
+        messages: conversation,
+        tools: canUseTools ? params.tools : undefined,
+        temperature: params.temperature,
+        maxTokens: params.maxTokens,
+        signal: params.signal,
+        onStart: () => {
+          if (!metadataSent) {
+            metadataSent = true;
+            params.onStart();
+          }
+        },
+        onToken: (token) => {
+          accumulated += token;
+          params.callbacks.onToken(token);
+        },
+      });
+
+      if (result.toolCalls.length === 0) {
+        params.callbacks.onComplete(accumulated, params.decision);
+        return;
+      }
+
+      conversation.push({
+        role: 'assistant',
+        content: result.text || null,
+        tool_calls: result.toolCalls,
+      });
+
+      for (const call of result.toolCalls) {
+        const toolName = call.function?.name || '';
+        const record = await executionService.executeTool({
+          toolName,
+          args: parseToolArguments(call.function?.arguments || ''),
+        });
+        params.state.toolsExecuted = true;
+        params.callbacks.onToolExecution?.(record);
+
+        conversation.push({
+          role: 'tool',
+          tool_call_id: call.id,
+          name: toolName,
+          content:
+            record.output ||
+            (record.status === 'pending_approval'
+              ? 'This action is waiting for the user to approve it in the app. Tell the user it needs approval.'
+              : `Tool failed: ${record.error || 'unknown error'}`),
+        });
+      }
+
+      if (modelCalls >= MAX_MODEL_CALLS) {
+        // Ask once more without tools so the user always gets a written answer.
+        await this.invokeOpenRouterStream({
+          apiKey: params.apiKey,
+          modelId: params.modelId,
+          messages: conversation,
+          tools: undefined,
+          temperature: params.temperature,
+          maxTokens: params.maxTokens,
+          signal: params.signal,
+          onStart: () => undefined,
+          onToken: (token) => {
+            accumulated += token;
+            params.callbacks.onToken(token);
+          },
+        });
+        params.callbacks.onComplete(accumulated, params.decision);
+        return;
+      }
+    }
+  }
+
   private async invokeOpenRouterStream(params: {
     apiKey: string;
     modelId: string;
     messages: OpenRouterMessage[];
+    tools?: OpenAIToolSchema[];
     temperature: number;
     maxTokens: number;
     signal?: AbortSignal;
     onStart: () => void;
     onToken: (token: string) => void;
-    onDone: (fullText: string) => void;
-  }): Promise<void> {
+  }): Promise<StreamResult> {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 45000);
+    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+    const forwardAbort = () => controller.abort();
 
     if (params.signal) {
-      params.signal.addEventListener('abort', () => controller.abort());
+      if (params.signal.aborted) controller.abort();
+      else params.signal.addEventListener('abort', forwardAbort);
     }
 
     try {
@@ -264,24 +382,27 @@ export class OpenRouterClient {
           temperature: params.temperature,
           max_tokens: params.maxTokens,
           stream: true,
+          ...(params.tools && params.tools.length > 0
+            ? { tools: params.tools, tool_choice: 'auto' }
+            : {}),
         }),
         signal: controller.signal,
       });
 
       if (!response.ok) {
         const errBody = await response.text().catch(() => '');
-        let parsedMessage = `HTTP ${response.status}`;
+        let parsedMessage = `Gateway error (HTTP ${response.status}).`;
         try {
           const jsonErr = JSON.parse(errBody);
           parsedMessage = jsonErr?.error?.message || jsonErr?.message || parsedMessage;
         } catch {
-          if (errBody) parsedMessage = `${parsedMessage}: ${errBody.slice(0, 180)}`;
+          if (errBody) parsedMessage = `${parsedMessage} ${errBody.slice(0, 180)}`;
         }
         throw new Error(parsedMessage);
       }
 
       if (!response.body) {
-        throw new Error('OpenRouter returned an empty response body.');
+        throw new Error('The chat gateway returned an empty response.');
       }
 
       params.onStart();
@@ -289,9 +410,53 @@ export class OpenRouterClient {
       const reader = response.body.getReader();
       const decoder = new TextDecoder('utf-8');
       let buffer = '';
-      let fullText = '';
+      let text = '';
+      const toolCalls: ChatToolCall[] = [];
 
-      while (true) {
+      const handleData = (dataPayload: string): boolean => {
+        if (dataPayload === '[DONE]') return true;
+        try {
+          const parsed = JSON.parse(dataPayload);
+          if (parsed?.error) {
+            throw new Error(parsed.error.message || 'Chat gateway stream error.');
+          }
+          const delta = parsed?.choices?.[0]?.delta;
+          if (!delta) return false;
+
+          if (typeof delta.content === 'string' && delta.content.length > 0) {
+            text += delta.content;
+            params.onToken(delta.content);
+          }
+
+          if (Array.isArray(delta.tool_calls)) {
+            for (const fragment of delta.tool_calls) {
+              const index = typeof fragment.index === 'number' ? fragment.index : toolCalls.length;
+              if (!toolCalls[index]) {
+                toolCalls[index] = {
+                  id: fragment.id || `call-${Date.now()}-${index}`,
+                  type: 'function',
+                  function: { name: '', arguments: '' },
+                };
+              }
+              if (fragment.id) toolCalls[index].id = fragment.id;
+              if (typeof fragment.function?.name === 'string') {
+                toolCalls[index].function.name += fragment.function.name;
+              }
+              if (typeof fragment.function?.arguments === 'string') {
+                toolCalls[index].function.arguments += fragment.function.arguments;
+              }
+            }
+          }
+        } catch (parseErr) {
+          if (parseErr instanceof Error && parseErr.message.includes('gateway stream error')) {
+            throw parseErr;
+          }
+        }
+        return false;
+      };
+
+      let finished = false;
+      while (!finished) {
         const { done, value } = await reader.read();
         if (done) break;
 
@@ -301,38 +466,18 @@ export class OpenRouterClient {
 
         for (const rawLine of lines) {
           const line = rawLine.trim();
-          if (!line || line.startsWith(':')) continue;
-          if (!line.startsWith('data:')) continue;
-
-          const dataPayload = line.slice(5).trim();
-          if (dataPayload === '[DONE]') {
-            clearTimeout(timeoutId);
-            params.onDone(fullText);
-            return;
-          }
-
-          try {
-            const parsed = JSON.parse(dataPayload);
-            if (parsed.error) {
-              throw new Error(parsed.error.message || 'OpenRouter stream error');
-            }
-            const deltaContent = parsed.choices?.[0]?.delta?.content;
-            if (typeof deltaContent === 'string' && deltaContent.length > 0) {
-              fullText += deltaContent;
-              params.onToken(deltaContent);
-            }
-          } catch (parseErr) {
-            if (parseErr instanceof Error && parseErr.message.includes('OpenRouter stream error')) {
-              throw parseErr;
-            }
+          if (!line || line.startsWith(':') || !line.startsWith('data:')) continue;
+          if (handleData(line.slice(5).trim())) {
+            finished = true;
+            break;
           }
         }
       }
 
-      clearTimeout(timeoutId);
-      params.onDone(fullText);
+      return { text, toolCalls: toolCalls.filter((call) => call && call.function.name) };
     } finally {
       clearTimeout(timeoutId);
+      if (params.signal) params.signal.removeEventListener('abort', forwardAbort);
     }
   }
 }

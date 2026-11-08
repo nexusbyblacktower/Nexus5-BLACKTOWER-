@@ -4,6 +4,7 @@ import {
   BrainRoutingMode,
   BrainType,
   ChatMessage,
+  ConnectionsStatus,
   Conversation,
   FileAttachment,
   GatewayStatus,
@@ -27,6 +28,7 @@ export interface SystemStatusResponse {
     sessionActive: boolean;
   };
   settings: NexusSettings;
+  connections?: ConnectionsStatus;
 }
 
 export interface StreamChatCallbacks {
@@ -64,6 +66,14 @@ async function fetchJson<T>(url: string, options?: RequestInit): Promise<T> {
 
 export const apiClient = {
   getStatus: () => fetchJson<SystemStatusResponse>('/api/status'),
+
+  getConnections: () => fetchJson<ConnectionsStatus>('/api/connections'),
+  disconnectGoogle: () =>
+    fetchJson<{ disconnected: boolean }>('/api/google/disconnect', { method: 'POST' }),
+  checkGateway: () =>
+    fetchJson<{ ok: boolean; message?: string; error?: string }>('/api/gateway/check', {
+      method: 'POST',
+    }),
 
   getSettings: () => fetchJson<NexusSettings>('/api/settings'),
   updateSettings: (updates: Partial<NexusSettings>) =>

@@ -8,6 +8,7 @@ import {
   Conversation,
   ProjectWorkspace,
 } from '../src/types/nexus.ts';
+import { syncDoc, unsyncDoc } from './supabaseStore.ts';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const DB_FILE = path.join(DATA_DIR, 'nexus_conversations.json');
@@ -84,6 +85,29 @@ export class ConversationService {
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2), 'utf-8');
   }
 
+  private syncConversation(conversation: Conversation): void {
+    syncDoc('conversation', conversation.id, conversation);
+  }
+
+  private syncProject(project: ProjectWorkspace): void {
+    syncDoc('project', project.id, project);
+  }
+
+  /** Replaces local state with the cloud copy, or seeds the cloud from local state. */
+  public hydrateFromCloud(projects: ProjectWorkspace[], conversations: Conversation[]): void {
+    const hasRemote = projects.length > 0 || conversations.length > 0;
+    if (!hasRemote) {
+      for (const project of this.db.projects) this.syncProject(project);
+      for (const conversation of this.db.conversations) this.syncConversation(conversation);
+      return;
+    }
+    this.db = {
+      projects: projects.length > 0 ? projects : this.db.projects,
+      conversations,
+    };
+    this.save(this.db);
+  }
+
   // Projects CRUD
   public listProjects(): ProjectWorkspace[] {
     return [...this.db.projects].sort(
@@ -118,6 +142,7 @@ export class ConversationService {
     };
     this.db.projects.unshift(project);
     this.save(this.db);
+    this.syncProject(project);
     return project;
   }
 
@@ -130,6 +155,10 @@ export class ConversationService {
         c.projectId === id ? { ...c, projectId: null } : c
       );
       this.save(this.db);
+      unsyncDoc('project', id);
+      for (const conversation of this.db.conversations) {
+        if (conversation.projectId === null) this.syncConversation(conversation);
+      }
       return true;
     }
     return false;
@@ -181,6 +210,7 @@ export class ConversationService {
     };
     this.db.conversations.unshift(conv);
     this.save(this.db);
+    this.syncConversation(conv);
     return conv;
   }
 
@@ -199,6 +229,7 @@ export class ConversationService {
       updatedAt: new Date().toISOString(),
     };
     this.save(this.db);
+    this.syncConversation(this.db.conversations[idx]);
     return this.db.conversations[idx];
   }
 
@@ -221,6 +252,7 @@ export class ConversationService {
 
     conv.updatedAt = new Date().toISOString();
     this.save(this.db);
+    this.syncConversation(conv);
     return conv;
   }
 
@@ -235,6 +267,7 @@ export class ConversationService {
     conv.messages = conv.messages.slice(0, msgIdx);
     conv.updatedAt = new Date().toISOString();
     this.save(this.db);
+    this.syncConversation(conv);
     return conv;
   }
 
@@ -243,6 +276,7 @@ export class ConversationService {
     this.db.conversations = this.db.conversations.filter((c) => c.id !== id);
     if (this.db.conversations.length !== initialLen) {
       this.save(this.db);
+      unsyncDoc('conversation', id);
       return true;
     }
     return false;

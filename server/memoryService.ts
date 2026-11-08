@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { MemoryCategory, MemoryEntry } from '../src/types/nexus.ts';
+import { syncDoc, unsyncDoc } from './supabaseStore.ts';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const MEMORY_FILE = path.join(DATA_DIR, 'nexus_memories.json');
@@ -28,19 +29,22 @@ const SEED_MEMORIES: MemoryEntry[] = [
     createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
     updatedAt: new Date(Date.now() - 86400000 * 2).toISOString(),
   },
-  {
-    id: 'mem-proj-01',
-    category: 'project_memory',
-    title: 'NEXUS 5.5 Dual-Brain Routing Policy',
-    content:
-      'FLASH Brain (deepseek/deepseek-v4.1-flash-1017) handles fast everyday synthesis and lightweight tool triage. REASONING Brain (anthropic/claude-sonnet-5.5) handles multi-step coding, architecture, and deep verification.',
-    projectId: 'proj-nexus-core',
-    tags: ['nexus', 'routing', 'models'],
-    userApproved: true,
-    createdAt: new Date(Date.now() - 86400000).toISOString(),
-    updatedAt: new Date(Date.now() - 86400000).toISOString(),
-  },
 ];
+
+const STOP_WORDS = new Set([
+  'the', 'and', 'for', 'with', 'that', 'this', 'from', 'have', 'what', 'when', 'where',
+  'which', 'about', 'your', 'you', 'our', 'can', 'could', 'would', 'should', 'please',
+  'help', 'need', 'want', 'into', 'then', 'than', 'them', 'they', 'there', 'here',
+  'are', 'was', 'were', 'will', 'just', 'like', 'also', 'some', 'any', 'how', 'why',
+  'not', 'but', 'all', 'get', 'got', 'use', 'using', 'nexus', 'make', 'sure',
+]);
+
+function tokenize(text: string): string[] {
+  return String(text || '')
+    .toLowerCase()
+    .split(/[^a-z0-9@._-]+/)
+    .filter((token) => token.length > 2 && !STOP_WORDS.has(token));
+}
 
 function ensureDataDir() {
   if (!fs.existsSync(DATA_DIR)) {
@@ -68,13 +72,27 @@ export class MemoryService {
     } catch (err) {
       console.error('Failed to read memory store, initializing seed memories:', err);
     }
-    this.save(SEED_MEMORIES);
+    this.persistLocal();
     return [...SEED_MEMORIES];
   }
 
-  private save(entries: MemoryEntry[]): void {
+  private persistLocal(): void {
     ensureDataDir();
-    fs.writeFileSync(MEMORY_FILE, JSON.stringify(entries, null, 2), 'utf-8');
+    fs.writeFileSync(MEMORY_FILE, JSON.stringify(this.memories, null, 2), 'utf-8');
+  }
+
+  private saveStore(): void {
+    this.persistLocal();
+  }
+
+  /** Replaces local state with the cloud copy, or seeds the cloud from local state. */
+  public hydrateFromCloud(rows: MemoryEntry[]): void {
+    if (!Array.isArray(rows) || rows.length === 0) {
+      for (const memory of this.memories) syncDoc('memory', memory.id, memory);
+      return;
+    }
+    this.memories = rows;
+    this.persistLocal();
   }
 
   public listMemories(filters?: {
@@ -105,26 +123,74 @@ export class MemoryService {
     return list.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
   }
 
+  /**
+   * Ranks approved memories against the current prompt so NEXUS recalls what is
+   * actually relevant instead of dumping the whole vault into the prompt.
+   */
+  public searchRelevant(
+    query: string,
+    options: {
+      limit?: number;
+      projectId?: string | null;
+      conversationId?: string | null;
+      includeUser?: boolean;
+      includeProject?: boolean;
+    } = {}
+  ): MemoryEntry[] {
+    const limit = options.limit ?? 10;
+    const tokens = tokenize(query);
+    const includeUser = options.includeUser ?? true;
+    const includeProject = options.includeProject ?? true;
+
+    const candidates = this.memories.filter((memory) => {
+      if (!memory.userApproved) return false;
+      if (memory.category === 'user_memory') return includeUser;
+      if (memory.category === 'project_memory') {
+        if (!includeProject) return false;
+        return !memory.projectId || memory.projectId === options.projectId;
+      }
+      if (memory.category === 'conversation_context') {
+        return memory.conversationId === options.conversationId;
+      }
+      return !memory.conversationId || memory.conversationId === options.conversationId;
+    });
+
+    const scored = candidates.map((memory) => {
+      const haystack = `${memory.title} ${memory.content} ${memory.tags.join(' ')}`.toLowerCase();
+      let score = 0;
+      for (const token of tokens) {
+        if (haystack.includes(token)) score += 3;
+        if (memory.title.toLowerCase().includes(token)) score += 2;
+        if (memory.tags.some((tag) => tag.toLowerCase().includes(token))) score += 1;
+      }
+      const ageDays = (Date.now() - new Date(memory.updatedAt).getTime()) / 86400000;
+      score += Math.max(0, 2 - ageDays / 14);
+      return { memory, score };
+    });
+
+    const matched = scored.filter((entry) => entry.score > 0);
+    const pool = matched.length > 0 ? matched : scored;
+
+    return pool
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit)
+      .map((entry) => entry.memory);
+  }
+
+  /** Memories injected into every prompt (approved + policy-scoped). */
   public getRelevantContextMemories(params: {
     projectId?: string | null;
     conversationId?: string | null;
     includeUserMemory: boolean;
     includeProjectMemory: boolean;
+    query?: string;
   }): MemoryEntry[] {
-    return this.memories.filter((m) => {
-      if (!m.userApproved) return false;
-      if (m.category === 'user_memory') return params.includeUserMemory;
-      if (m.category === 'project_memory') {
-        if (!params.includeProjectMemory) return false;
-        return !m.projectId || m.projectId === params.projectId;
-      }
-      if (m.category === 'conversation_context') {
-        return m.conversationId === params.conversationId;
-      }
-      if (m.category === 'temporary_task_context') {
-        return !m.conversationId || m.conversationId === params.conversationId;
-      }
-      return false;
+    return this.searchRelevant(params.query || '', {
+      limit: 12,
+      projectId: params.projectId,
+      conversationId: params.conversationId,
+      includeUser: params.includeUserMemory,
+      includeProject: params.includeProjectMemory,
     });
   }
 
@@ -151,7 +217,8 @@ export class MemoryService {
       updatedAt: now,
     };
     this.memories.unshift(entry);
-    this.save(this.memories);
+    this.saveStore();
+    syncDoc('memory', entry.id, entry);
     return entry;
   }
 
@@ -168,7 +235,8 @@ export class MemoryService {
       updatedAt: new Date().toISOString(),
     };
     this.memories[idx] = updated;
-    this.save(this.memories);
+    this.saveStore();
+    syncDoc('memory', updated.id, updated);
     return updated;
   }
 
@@ -176,7 +244,8 @@ export class MemoryService {
     const initialLen = this.memories.length;
     this.memories = this.memories.filter((m) => m.id !== id);
     if (this.memories.length !== initialLen) {
-      this.save(this.memories);
+      this.saveStore();
+      unsyncDoc('memory', id);
       return true;
     }
     return false;

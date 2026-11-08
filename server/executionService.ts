@@ -1,4 +1,5 @@
 import { ToolExecutionRecord } from '../src/types/nexus.ts';
+import { googleWorkspaceService } from './googleWorkspaceService.ts';
 import { memoryService } from './memoryService.ts';
 import { settingsService } from './settingsService.ts';
 import { wrapUntrustedContent } from './systemPrompt.ts';
@@ -302,23 +303,97 @@ export class ExecutionService {
 
       case 'workspace_memory_lookup': {
         const query = String(args.query || '');
-        const matches = memoryService.listMemories({ search: query });
+        const matches = query.trim()
+          ? memoryService.searchRelevant(query, { limit: 8 })
+          : memoryService.listMemories().slice(0, 8);
         return JSON.stringify(
           {
             query,
             matchCount: matches.length,
-            memories: matches.slice(0, 6).map((m) => ({
+            memories: matches.map((m) => ({
               id: m.id,
               category: m.category,
               title: m.title,
               content: m.content,
               tags: m.tags,
+              updatedAt: m.updatedAt,
             })),
           },
           null,
           2
         );
       }
+
+      case 'memory_save': {
+        const title = String(args.title || '').trim();
+        const content = String(args.content || '').trim();
+        if (!title || !content) {
+          throw new Error('Both title and content are required to save a memory.');
+        }
+        const scope = String(args.category || 'user').toLowerCase();
+        const entry = memoryService.createMemory({
+          category: scope === 'project' ? 'project_memory' : 'user_memory',
+          title: title.slice(0, 80),
+          content: content.slice(0, 2000),
+          tags: ['saved-by-nexus'],
+          userApproved: true,
+        });
+        return JSON.stringify(
+          { saved: true, id: entry.id, title: entry.title, category: entry.category },
+          null,
+          2
+        );
+      }
+
+      case 'gmail_search':
+        return googleWorkspaceService.gmailSearch(
+          String(args.query || ''),
+          Number(args.maxResults) || 8
+        );
+
+      case 'gmail_read':
+        return googleWorkspaceService.gmailRead(String(args.messageId || ''));
+
+      case 'gmail_send':
+        return googleWorkspaceService.gmailSend({
+          to: String(args.to || ''),
+          subject: String(args.subject || ''),
+          body: String(args.body || ''),
+          cc: args.cc ? String(args.cc) : undefined,
+        });
+
+      case 'calendar_list_events':
+        return googleWorkspaceService.calendarList({
+          timeMin: args.timeMin ? String(args.timeMin) : undefined,
+          timeMax: args.timeMax ? String(args.timeMax) : undefined,
+          maxResults: Number(args.maxResults) || 10,
+          query: args.query ? String(args.query) : undefined,
+        });
+
+      case 'calendar_create_event':
+        return googleWorkspaceService.calendarCreate({
+          summary: String(args.summary || ''),
+          start: String(args.start || ''),
+          end: String(args.end || ''),
+          timeZone: args.timeZone ? String(args.timeZone) : undefined,
+          description: args.description ? String(args.description) : undefined,
+          location: args.location ? String(args.location) : undefined,
+          attendees: args.attendees
+            ? String(args.attendees)
+                .split(',')
+                .map((email) => email.trim())
+                .filter(Boolean)
+            : [],
+        });
+
+      case 'drive_search':
+        return googleWorkspaceService.driveSearch(
+          String(args.query || ''),
+          Number(args.maxResults) || 10
+        );
+
+      case 'drive_read_file':
+        return googleWorkspaceService.driveRead(String(args.fileId || ''));
 
       case 'external_webhook_dispatch': {
         const destination = String(args.destination || 'default-webhook');

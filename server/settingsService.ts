@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { BRAIN_MODELS, NexusSettings } from '../src/types/nexus.ts';
+import { syncDoc } from './supabaseStore.ts';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');
 const SETTINGS_FILE = path.join(DATA_DIR, 'nexus_settings.json');
@@ -31,7 +32,15 @@ export const DEFAULT_NEXUS_SETTINGS: NexusSettings = {
     text_summarizer_analyzer: true,
     file_content_analyzer: true,
     workspace_memory_lookup: true,
-    external_webhook_dispatch: true,
+    memory_save: true,
+    gmail_search: true,
+    gmail_read: true,
+    gmail_send: true,
+    calendar_list_events: true,
+    calendar_create_event: true,
+    drive_search: true,
+    drive_read_file: true,
+    external_webhook_dispatch: false,
   },
   appearance: {
     glassBlurIntensity: 'balanced',
@@ -48,6 +57,7 @@ function ensureDataDir() {
 
 export class SettingsService {
   private settings: NexusSettings;
+  private cloudSyncEnabled = false;
 
   constructor() {
     ensureDataDir();
@@ -78,6 +88,40 @@ export class SettingsService {
   private save(settings: NexusSettings): void {
     ensureDataDir();
     fs.writeFileSync(SETTINGS_FILE, JSON.stringify(settings, null, 2), 'utf-8');
+    if (this.cloudSyncEnabled) {
+      syncDoc('settings', 'default', settings);
+    }
+  }
+
+  /** Applies the cloud copy (or seeds the cloud with local defaults). */
+  public hydrateFromCloud(remote: Partial<NexusSettings> | null): void {
+    if (remote) {
+      this.settings = {
+        ...DEFAULT_NEXUS_SETTINGS,
+        ...remote,
+        memoryPolicy: {
+          ...DEFAULT_NEXUS_SETTINGS.memoryPolicy,
+          ...(remote.memoryPolicy || {}),
+        },
+        agentLimits: {
+          ...DEFAULT_NEXUS_SETTINGS.agentLimits,
+          ...(remote.agentLimits || {}),
+        },
+        enabledTools: {
+          ...DEFAULT_NEXUS_SETTINGS.enabledTools,
+          ...(remote.enabledTools || {}),
+        },
+        appearance: {
+          ...DEFAULT_NEXUS_SETTINGS.appearance,
+          ...(remote.appearance || {}),
+        },
+      };
+      ensureDataDir();
+      fs.writeFileSync(SETTINGS_FILE, JSON.stringify(this.settings, null, 2), 'utf-8');
+    } else {
+      syncDoc('settings', 'default', this.settings);
+    }
+    this.cloudSyncEnabled = true;
   }
 
   public getSettings(): NexusSettings {

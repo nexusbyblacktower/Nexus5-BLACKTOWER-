@@ -7,10 +7,10 @@ import {
   MessageSquare,
   Plus,
   Search,
+  Plug,
   Settings,
   Trash2,
   Workflow,
-  Wrench,
   X,
 } from 'lucide-react';
 import { Conversation, ProjectWorkspace } from '../types/nexus.ts';
@@ -31,10 +31,9 @@ interface LeftSidebarProps {
   onOpenProjectsModal: () => void;
   onOpenAgentPanel: () => void;
   onOpenMemoryModal: () => void;
-  onOpenToolsModal: () => void;
+  onOpenConnectionsModal: () => void;
   onOpenSettingsModal: () => void;
   memoryCount: number;
-  toolsCount: number;
   tasksCount: number;
 }
 
@@ -54,16 +53,24 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   onOpenProjectsModal,
   onOpenAgentPanel,
   onOpenMemoryModal,
-  onOpenToolsModal,
+  onOpenConnectionsModal,
   onOpenSettingsModal,
   memoryCount,
-  toolsCount,
   tasksCount,
 }) => {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
+  const [isMobile, setIsMobile] = useState(
+    typeof window !== 'undefined' ? window.innerWidth < 768 : false
+  );
 
-  if (collapsed) {
+  React.useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  if (collapsed || isMobile) {
     return (
       <aside className="w-14 border-r border-white/[0.08] bg-[#090b11]/75 backdrop-blur-2xl flex flex-col items-center py-3 gap-3 shrink-0 z-20 select-none">
         <button
@@ -106,11 +113,11 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
         <button
           type="button"
-          onClick={onOpenToolsModal}
-          title="Tools & Connectors"
+          onClick={onOpenConnectionsModal}
+          title="Connections"
           className="w-9 h-9 rounded-lg hover:bg-white/[0.06] flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer"
         >
-          <Wrench className="w-4 h-4" />
+          <Plug className="w-4 h-4" />
         </button>
 
         <div className="mt-auto">
@@ -200,9 +207,6 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
               }`}
             >
               <span className="truncate">{proj.name}</span>
-              <span className="text-[10px] font-mono text-slate-500 shrink-0">
-                {proj.defaultBrain}
-              </span>
             </button>
           ))}
         </div>
@@ -282,10 +286,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                       <MessageSquare className="w-3.5 h-3.5 shrink-0 text-slate-500" />
                       <div className="truncate">
                         <div className="truncate font-medium">{conv.title}</div>
-                        <div className="text-[10px] text-slate-500 font-mono flex items-center gap-1">
-                          <span>{conv.selectedBrain}</span>
-                          <span>·</span>
-                          <span>{conv.messages.length} msg</span>
+                        <div className="text-[10px] text-slate-500">
+                          {conv.messages.length} messages
                         </div>
                       </div>
                     </button>
@@ -347,14 +349,13 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
         <button
           type="button"
-          onClick={onOpenToolsModal}
+          onClick={onOpenConnectionsModal}
           className="w-full px-2.5 py-2 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-white/[0.05] flex items-center justify-between transition-colors cursor-pointer"
         >
           <span className="flex items-center gap-2.5">
-            <Wrench className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Tools & Connectors</span>
+            <Plug className="w-3.5 h-3.5 text-emerald-400" />
+            <span>Connections</span>
           </span>
-          <span className="font-mono text-[11px] text-slate-500 tabular-nums">{toolsCount}</span>
         </button>
 
         <button

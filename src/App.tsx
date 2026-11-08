@@ -11,7 +11,7 @@ import { LeftSidebar } from './components/LeftSidebar.tsx';
 import { MemoryModal } from './components/MemoryModal.tsx';
 import { ProjectsModal } from './components/ProjectsModal.tsx';
 import { SettingsModal } from './components/SettingsModal.tsx';
-import { ToolsConnectorsModal } from './components/ToolsConnectorsModal.tsx';
+import { ConnectionsModal } from './components/ConnectionsModal.tsx';
 import { TopBar } from './components/TopBar.tsx';
 import { apiClient, SystemStatusResponse } from './services/apiClient.ts';
 import {
@@ -20,9 +20,9 @@ import {
   BrainRoutingDecision,
   BrainRoutingMode,
   BrainType,
+  ConnectionsStatus,
   Conversation,
   FileAttachment,
-  MCPConnectorAdapter,
   MemoryEntry,
   NexusSettings,
   ProjectWorkspace,
@@ -56,7 +56,15 @@ const FALLBACK_SETTINGS: NexusSettings = {
     text_summarizer_analyzer: true,
     file_content_analyzer: true,
     workspace_memory_lookup: true,
-    external_webhook_dispatch: true,
+    memory_save: true,
+    gmail_search: true,
+    gmail_read: true,
+    gmail_send: true,
+    calendar_list_events: true,
+    calendar_create_event: true,
+    drive_search: true,
+    drive_read_file: true,
+    external_webhook_dispatch: false,
   },
   appearance: {
     glassBlurIntensity: 'balanced',
@@ -74,19 +82,22 @@ export default function App() {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [memories, setMemories] = useState<MemoryEntry[]>([]);
   const [tools, setTools] = useState<ToolDefinition[]>([]);
-  const [connectors, setConnectors] = useState<MCPConnectorAdapter[]>([]);
+  const [connections, setConnections] = useState<ConnectionsStatus | null>(null);
   const [agentTasks, setAgentTasks] = useState<AgentTask[]>([]);
+  const [notice, setNotice] = useState<string | null>(null);
 
   // Active Brain & Router controls
   const [activeBrain, setActiveBrain] = useState<BrainType>('FLASH');
   const [brainMode, setBrainMode] = useState<BrainRoutingMode>('AUTO');
 
   // UI Panels & Modals
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    typeof window !== 'undefined' ? window.innerWidth < 1024 : false
+  );
   const [agentPanelOpen, setAgentPanelOpen] = useState(false);
   const [memoryModalOpen, setMemoryModalOpen] = useState(false);
   const [projectsModalOpen, setProjectsModalOpen] = useState(false);
-  const [toolsModalOpen, setToolsModalOpen] = useState(false);
+  const [connectionsModalOpen, setConnectionsModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -122,13 +133,13 @@ export default function App() {
 
       setStatus(statusData);
       setSettings(statusData.settings);
+      setConnections(statusData.connections || null);
       setActiveBrain(statusData.settings.defaultBrain);
       setBrainMode(statusData.settings.brainMode);
       setConversations(convList);
       setProjects(projList);
       setMemories(memList);
       setTools(toolsData.tools);
-      setConnectors(toolsData.connectors);
       setAgentTasks(tasksList);
 
       if (convList.length > 0) {
@@ -144,6 +155,34 @@ export default function App() {
   useEffect(() => {
     loadInitialWorkspace();
   }, [loadInitialWorkspace]);
+
+  // Surface the result of the Google Workspace connection flow.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const google = params.get('google');
+    if (!google) return;
+    setNotice(
+      google === 'connected'
+        ? 'Google Workspace connected.'
+        : google === 'denied'
+        ? 'Google connection was cancelled.'
+        : 'Google connection did not complete. Please try again.'
+    );
+    window.history.replaceState({}, '', window.location.pathname);
+    apiClient
+      .getConnections()
+      .then(setConnections)
+      .catch(() => undefined);
+  }, []);
+
+  // Keep the chat readable on narrow screens.
+  useEffect(() => {
+    const onResize = () => {
+      if (window.innerWidth < 1024) setSidebarCollapsed(true);
+    };
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
 
   // Keyboard shortcut Cmd/Ctrl + K for New Session
   useEffect(() => {
@@ -424,14 +463,13 @@ export default function App() {
         onToggleAgentPanel={() => setAgentPanelOpen((p) => !p)}
         activeBrain={activeBrain}
         brainMode={brainMode}
-        selectedModel={selectedModel}
-        settings={settings}
-        gatewayStatus={status?.gateway || null}
         activeProject={activeProject}
         operator={status?.operator || null}
+        googleConnected={Boolean(connections?.google.connected)}
         onChangeBrainMode={handleChangeBrainMode}
         onSelectBrain={handleSelectBrain}
         onOpenSettings={() => setSettingsModalOpen(true)}
+        onOpenConnections={() => setConnectionsModalOpen(true)}
         activeTasksCount={agentTasks.length}
       />
 
@@ -468,10 +506,9 @@ export default function App() {
           onOpenProjectsModal={() => setProjectsModalOpen(true)}
           onOpenAgentPanel={() => setAgentPanelOpen(true)}
           onOpenMemoryModal={() => setMemoryModalOpen(true)}
-          onOpenToolsModal={() => setToolsModalOpen(true)}
+          onOpenConnectionsModal={() => setConnectionsModalOpen(true)}
           onOpenSettingsModal={() => setSettingsModalOpen(true)}
           memoryCount={memories.length}
-          toolsCount={tools.length}
           tasksCount={agentTasks.length}
         />
 
@@ -484,7 +521,6 @@ export default function App() {
             streamingTools={streamingTools}
             isStreaming={isStreaming}
             activeBrain={activeBrain}
-            settings={settings}
             onQuickPrompt={(prompt, runAsAgent) => {
               if (runAsAgent) {
                 handleRunAgentTask(prompt);
@@ -535,7 +571,6 @@ export default function App() {
             isStreaming={isStreaming}
             activeBrain={activeBrain}
             brainMode={brainMode}
-            settings={settings}
             onChangeBrainMode={handleChangeBrainMode}
             onSelectBrain={handleSelectBrain}
           />
@@ -589,11 +624,11 @@ export default function App() {
         }}
       />
 
-      <ToolsConnectorsModal
-        open={toolsModalOpen}
-        onClose={() => setToolsModalOpen(false)}
+      <ConnectionsModal
+        open={connectionsModalOpen}
+        onClose={() => setConnectionsModalOpen(false)}
+        connections={connections}
         tools={tools}
-        connectors={connectors}
         settings={settings}
         onToggleTool={async (toolName, enabled) => {
           const updated = await apiClient.updateSettings({
@@ -604,12 +639,15 @@ export default function App() {
           });
           setSettings(updated);
         }}
-        onTestTool={(toolName, args, approvedByUser) =>
-          apiClient.executeToolDirect(toolName, args, approvedByUser)
-        }
-        onRegisterConnector={async (input) => {
-          const created = await apiClient.registerConnector(input);
-          setConnectors((prev) => [...prev, created]);
+        onRefresh={async () => {
+          const next = await apiClient.getConnections();
+          setConnections(next);
+        }}
+        onCheckGateway={() => apiClient.checkGateway()}
+        onDisconnectGoogle={async () => {
+          await apiClient.disconnectGoogle();
+          const next = await apiClient.getConnections();
+          setConnections(next);
         }}
       />
 
@@ -617,7 +655,6 @@ export default function App() {
         open={settingsModalOpen}
         onClose={() => setSettingsModalOpen(false)}
         settings={settings}
-        gatewayStatus={status?.gateway || null}
         onSaveSettings={async (updates) => {
           const updated = await apiClient.updateSettings(updates);
           setSettings(updated);
@@ -631,6 +668,19 @@ export default function App() {
           setBrainMode(reset.brainMode);
         }}
       />
+
+      {notice && (
+        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-[60] px-4 py-2.5 rounded-2xl bg-[#12141c]/90 backdrop-blur-xl border border-white/[0.12] shadow-2xl flex items-center gap-3">
+          <span className="text-xs text-slate-100">{notice}</span>
+          <button
+            type="button"
+            onClick={() => setNotice(null)}
+            className="text-slate-400 hover:text-white text-xs cursor-pointer"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
     </div>
   );
 }

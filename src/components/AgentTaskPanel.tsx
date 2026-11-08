@@ -11,6 +11,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { AgentTask } from '../types/nexus.ts';
+import { toolLabel } from '../utils/toolLabels.ts';
 import { MarkdownRenderer } from './MarkdownRenderer.tsx';
 
 interface AgentTaskPanelProps {
@@ -50,14 +51,12 @@ export const AgentTaskPanel: React.FC<AgentTaskPanelProps> = ({
   };
 
   return (
-    <aside className="w-96 border-l border-white/[0.08] bg-[#090b11]/85 backdrop-blur-2xl flex flex-col shrink-0 z-20 select-none">
+    <aside className="w-96 max-sm:absolute max-sm:inset-y-0 max-sm:right-0 max-sm:w-[88%] max-sm:z-40 border-l border-white/[0.08] bg-[#090b11]/95 backdrop-blur-2xl flex flex-col shrink-0 z-20 select-none">
       {/* Panel Header */}
       <div className="h-14 px-4 border-b border-white/[0.08] flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Workflow className="w-4 h-4 text-cyan-400" />
-          <span className="text-sm font-semibold text-white">
-            Agent Execution Protocol
-          </span>
+          <span className="text-sm font-semibold text-white">Tasks</span>
         </div>
         <button
           type="button"
@@ -71,19 +70,17 @@ export const AgentTaskPanel: React.FC<AgentTaskPanelProps> = ({
       {/* Quick Agent Objective Dispatcher */}
       <form onSubmit={handleLaunch} className="p-3.5 border-b border-white/[0.08] space-y-2">
         <label className="block text-[11px] font-semibold text-slate-400">
-          Dispatch New Autonomous Task
+          New task
         </label>
         <textarea
           value={objectiveInput}
           onChange={(e) => setObjectiveInput(e.target.value)}
           rows={2}
-          placeholder="e.g., Inspect current UTC/KL timestamps, compute (4800 * 1.125), and dispatch webhook..."
+          placeholder="e.g., Summarize my unread email and add any deadlines to my calendar"
           className="w-full p-2.5 rounded-xl bg-white/[0.03] border border-white/[0.08] focus:border-violet-400/40 focus:outline-none text-xs text-slate-100 placeholder:text-slate-500 resize-none"
         />
         <div className="flex items-center justify-between gap-2">
-          <span className="text-[10px] font-mono text-slate-500">
-            UNDERSTAND → PLAN → EXECUTE → VERIFY
-          </span>
+          <span className="text-[10px] text-slate-500">Runs end to end</span>
           <button
             type="submit"
             disabled={!objectiveInput.trim() || isRunningTask}
@@ -124,7 +121,7 @@ export const AgentTaskPanel: React.FC<AgentTaskPanelProps> = ({
               No Active Agent Tasks
             </div>
             <p className="text-[11px] text-slate-500 leading-relaxed">
-              Launch an autonomous workflow above or click &ldquo;Run Agent Protocol&rdquo; in the chat composer to execute multi-step plans with real backend tool verification.
+              Start a task above, or use &ldquo;Run as task&rdquo; in the composer when you want NEXUS to work through several steps.
             </p>
           </div>
         ) : (
@@ -154,11 +151,11 @@ export const AgentTaskPanel: React.FC<AgentTaskPanelProps> = ({
                 {activeTask.objective}
               </div>
 
-              <div className="pt-1.5 border-t border-white/[0.06] text-[11px] font-mono text-slate-400 flex items-center justify-between">
-                <span>Brain: {activeTask.routingDecision.selectedBrain}</span>
-                <span className="truncate max-w-[170px]">
-                  {activeTask.routingDecision.executedModelId}
+              <div className="pt-1.5 border-t border-white/[0.06] text-[11px] text-slate-400 flex items-center justify-between">
+                <span>
+                  {activeTask.routingDecision.selectedBrain === 'REASONING' ? 'Deep' : 'Fast'} mode
                 </span>
+                <span>{activeTask.toolCalls.length} action(s)</span>
               </div>
             </div>
 
@@ -175,11 +172,12 @@ export const AgentTaskPanel: React.FC<AgentTaskPanelProps> = ({
                     <span>Approval Required: Sensitive Action</span>
                   </div>
                   <p className="text-[11px] text-amber-100/80 leading-relaxed">
-                    Tool <code className="font-mono text-amber-200">{pendingTool.toolName}</code> requests permission to execute with arguments:
+                    {String(
+                      pendingTool.arguments.payloadSummary ||
+                        pendingTool.arguments.destination ||
+                        'This action sends data outside NEXUS.'
+                    )}
                   </p>
-                  <pre className="p-2 rounded bg-black/50 text-[11px] font-mono text-amber-200 overflow-x-auto">
-                    {JSON.stringify(pendingTool.arguments, null, 2)}
-                  </pre>
                   <div className="flex items-center gap-2 pt-1">
                     <button
                       type="button"
@@ -260,32 +258,38 @@ export const AgentTaskPanel: React.FC<AgentTaskPanelProps> = ({
               </div>
             </div>
 
-            {/* Executed Tool Calls Log */}
+            {/* Actions taken */}
             {activeTask.toolCalls.length > 0 && (
               <div className="space-y-2">
                 <div className="text-[11px] font-semibold text-slate-400">
-                  Backend Tool Calls ({activeTask.toolCalls.length})
+                  Actions taken ({activeTask.toolCalls.length})
                 </div>
                 {activeTask.toolCalls.map((tc) => (
                   <div
                     key={tc.id}
-                    className="p-2.5 rounded-xl bg-[#06070c] border border-white/[0.07] space-y-1.5 text-[11px] font-mono select-text"
+                    className="flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl bg-white/[0.03] border border-white/[0.06] text-[11px]"
                   >
-                    <div className="flex items-center justify-between">
-                      <span className="text-emerald-300 flex items-center gap-1.5">
-                        <Terminal className="w-3 h-3" />
-                        <span>{tc.toolName}</span>
-                      </span>
-                      <span className="text-slate-400 tabular-nums">
-                        {tc.status} {tc.durationMs ? `· ${tc.durationMs}ms` : ''}
-                      </span>
-                    </div>
-                    {tc.output && (
-                      <pre className="p-2 rounded bg-black/60 text-[10.5px] text-slate-300 overflow-x-auto max-h-36">
-                        {tc.output}
-                      </pre>
-                    )}
-                    {tc.error && <div className="text-rose-400">{tc.error}</div>}
+                    <span className="flex items-center gap-1.5 text-slate-200">
+                      <Terminal className="w-3 h-3 text-emerald-300" />
+                      <span>{toolLabel(tc.toolName)}</span>
+                    </span>
+                    <span
+                      className={
+                        tc.status === 'completed'
+                          ? 'text-emerald-300'
+                          : tc.status === 'failed'
+                          ? 'text-rose-300'
+                          : 'text-amber-300'
+                      }
+                    >
+                      {tc.status === 'completed'
+                        ? 'Done'
+                        : tc.status === 'failed'
+                        ? 'Failed'
+                        : tc.status === 'pending_approval'
+                        ? 'Needs approval'
+                        : 'Skipped'}
+                    </span>
                   </div>
                 ))}
               </div>
@@ -295,10 +299,12 @@ export const AgentTaskPanel: React.FC<AgentTaskPanelProps> = ({
             {activeTask.finalResult && (
               <div className="p-3 rounded-xl bg-violet-500/[0.08] border border-violet-400/25 space-y-2 select-text">
                 <div className="text-xs font-semibold text-violet-200 flex items-center justify-between">
-                  <span>Verified Final Synthesis</span>
-                  <span className="font-mono text-[10px] text-emerald-300">
-                    {activeTask.verificationSummary}
-                  </span>
+                  <span>Result</span>
+                  {activeTask.verificationSummary && (
+                    <span className="text-[10px] text-emerald-300">
+                      {activeTask.verificationSummary}
+                    </span>
+                  )}
                 </div>
                 <div className="text-xs">
                   <MarkdownRenderer content={activeTask.finalResult} />
@@ -308,7 +314,7 @@ export const AgentTaskPanel: React.FC<AgentTaskPanelProps> = ({
 
             {activeTask.error && (
               <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-500/30 text-xs text-rose-200">
-                <strong>Execution Error:</strong> {activeTask.error}
+                {activeTask.error}
               </div>
             )}
           </>

@@ -144,8 +144,8 @@ export interface ToolDefinition {
   name: string;
   displayName: string;
   description: string;
-  category: 'core_utility' | 'analysis' | 'memory' | 'external_connector';
-  permissionLevel: 'read_only' | 'sensitive_approval_required';
+  category: 'core_utility' | 'analysis' | 'memory' | 'external_connector' | 'google_workspace';
+  permissionLevel: 'read_only' | 'workspace_write' | 'sensitive_approval_required';
   enabledByDefault: boolean;
   parametersSchema: {
     type: 'object';
@@ -194,17 +194,34 @@ export interface NexusSettings {
 }
 
 export interface GatewayStatus {
-  openRouterConfigured: boolean;
-  openRouterEndpoint: string;
-  geminiFallbackAvailable: boolean;
+  chatGatewayReady: boolean;
+  toolCallingEnabled: boolean;
   configuredModels: {
     flash: string;
     reasoning: string;
     fallback: string;
   };
-  persistenceLayer: {
-    engine: string;
-    storagePath: string;
-    persistentAcrossRestarts: boolean;
-  };
+}
+
+export interface GoogleConnectionStatus {
+  configured: boolean;
+  connected: boolean;
+  email?: string;
+  connectedAt?: string;
+  scopes?: string[];
+  lastError?: string;
+  redirectUri?: string;
+}
+
+export interface StorageStatus {
+  configured: boolean;
+  reachable: boolean;
+  schemaReady: boolean;
+  engine: 'supabase' | 'local';
+  error?: string;
+}
+
+export interface ConnectionsStatus {
+  google: GoogleConnectionStatus;
+  storage: StorageStatus;
 }
