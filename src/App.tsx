@@ -82,7 +82,12 @@ export default function App() {
   const [brainMode, setBrainMode] = useState<BrainRoutingMode>('AUTO');
 
   // UI Panels & Modals
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [isNarrow, setIsNarrow] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth < 1024
+  );
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(
+    () => typeof window !== 'undefined' && window.innerWidth < 1024
+  );
   const [agentPanelOpen, setAgentPanelOpen] = useState(false);
   const [memoryModalOpen, setMemoryModalOpen] = useState(false);
   const [projectsModalOpen, setProjectsModalOpen] = useState(false);
@@ -101,10 +106,6 @@ export default function App() {
 
   const activeConversation =
     conversations.find((c) => c.id === activeConversationId) || null;
-  const activeProject =
-    projects.find((p) => p.id === (activeConversation?.projectId ?? selectedProjectId)) ||
-    null;
-
   const selectedModel =
     activeBrain === 'REASONING' ? settings.reasoningModelId : settings.flashModelId;
 
@@ -157,6 +158,17 @@ export default function App() {
     return () => window.removeEventListener('keydown', handler);
   });
 
+  // On narrow screens the side panels float over the chat instead of squeezing it
+  useEffect(() => {
+    const handleResize = () => {
+      const narrow = window.innerWidth < 1024;
+      setIsNarrow(narrow);
+      if (narrow) setSidebarCollapsed(true);
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
   // Filter conversations when search or project changes
   const filteredConversations = conversations.filter((c) => {
     if (selectedProjectId && c.projectId !== selectedProjectId) return false;
@@ -181,6 +193,7 @@ export default function App() {
       });
       setConversations((prev) => [created, ...prev]);
       setActiveConversationId(created.id);
+      if (isNarrow) setSidebarCollapsed(true);
     } catch (err) {
       console.error('Failed to create conversation:', err);
     }
@@ -188,40 +201,11 @@ export default function App() {
 
   const handleSelectConversation = (id: string) => {
     setActiveConversationId(id);
+    if (isNarrow) setSidebarCollapsed(true);
     const found = conversations.find((c) => c.id === id);
     if (found) {
       setActiveBrain(found.selectedBrain);
       setBrainMode(found.brainMode);
-    }
-  };
-
-  const handleChangeBrainMode = async (mode: BrainRoutingMode) => {
-    setBrainMode(mode);
-    if (activeConversationId) {
-      const updated = await apiClient.updateConversation(activeConversationId, {
-        brainMode: mode,
-      });
-      setConversations((prev) =>
-        prev.map((c) => (c.id === updated.id ? updated : c))
-      );
-    }
-  };
-
-  const handleSelectBrain = async (brain: BrainType) => {
-    setActiveBrain(brain);
-    setBrainMode('MANUAL');
-    const model =
-      brain === 'REASONING' ? settings.reasoningModelId : settings.flashModelId;
-
-    if (activeConversationId) {
-      const updated = await apiClient.updateConversation(activeConversationId, {
-        selectedBrain: brain,
-        selectedModel: model,
-        brainMode: 'MANUAL',
-      });
-      setConversations((prev) =>
-        prev.map((c) => (c.id === updated.id ? updated : c))
-      );
     }
   };
 
@@ -422,24 +406,29 @@ export default function App() {
         onToggleSidebar={() => setSidebarCollapsed((p) => !p)}
         agentPanelOpen={agentPanelOpen}
         onToggleAgentPanel={() => setAgentPanelOpen((p) => !p)}
-        activeBrain={activeBrain}
-        brainMode={brainMode}
-        selectedModel={selectedModel}
-        settings={settings}
-        gatewayStatus={status?.gateway || null}
-        activeProject={activeProject}
         operator={status?.operator || null}
-        onChangeBrainMode={handleChangeBrainMode}
-        onSelectBrain={handleSelectBrain}
         onOpenSettings={() => setSettingsModalOpen(true)}
         activeTasksCount={agentTasks.length}
       />
 
       {/* Main Workspace Frame */}
       <div className="flex-1 flex min-h-0 relative z-10">
+        {/* Backdrop when a floating side panel is open on a narrow screen */}
+        {isNarrow && (!sidebarCollapsed || agentPanelOpen) && (
+          <div
+            aria-hidden="true"
+            onClick={() => {
+              setSidebarCollapsed(true);
+              setAgentPanelOpen(false);
+            }}
+            className="fixed inset-0 top-16 bg-black/55 backdrop-blur-sm z-20"
+          />
+        )}
+
         {/* Collapsible Left Sidebar */}
         <LeftSidebar
           collapsed={sidebarCollapsed}
+          overlay={isNarrow}
           conversations={filteredConversations}
           activeConversationId={activeConversationId}
           searchQuery={searchQuery}
@@ -480,11 +469,7 @@ export default function App() {
           <ChatWorkspace
             messages={activeConversation?.messages || []}
             streamingContent={streamingContent}
-            streamingRouting={streamingRouting}
-            streamingTools={streamingTools}
             isStreaming={isStreaming}
-            activeBrain={activeBrain}
-            settings={settings}
             onQuickPrompt={(prompt, runAsAgent) => {
               if (runAsAgent) {
                 handleRunAgentTask(prompt);
@@ -533,17 +518,13 @@ export default function App() {
             }
             onStopGeneration={handleStopGeneration}
             isStreaming={isStreaming}
-            activeBrain={activeBrain}
-            brainMode={brainMode}
-            settings={settings}
-            onChangeBrainMode={handleChangeBrainMode}
-            onSelectBrain={handleSelectBrain}
           />
         </main>
 
         {/* Right Collapsible Agent Protocol Panel */}
         <AgentTaskPanel
           open={agentPanelOpen}
+          overlay={isNarrow}
           onClose={() => setAgentPanelOpen(false)}
           tasks={agentTasks}
           isRunningTask={isRunningAgentTask}

@@ -1,32 +1,12 @@
 import React, { useRef, useState } from 'react';
-import {
-  Brain,
-  FileText,
-  Paperclip,
-  Send,
-  Square,
-  Workflow,
-  Wrench,
-  X,
-  Zap,
-} from 'lucide-react';
-import {
-  BrainRoutingMode,
-  BrainType,
-  FileAttachment,
-  NexusSettings,
-} from '../types/nexus.ts';
+import { FileText, Paperclip, Send, Square, Workflow, X } from 'lucide-react';
+import { FileAttachment } from '../types/nexus.ts';
 
 interface ChatComposerProps {
   onSendMessage: (content: string, attachments: FileAttachment[]) => void;
   onRunAsAgentTask: (objective: string, attachments: FileAttachment[]) => void;
   onStopGeneration: () => void;
   isStreaming: boolean;
-  activeBrain: BrainType;
-  brainMode: BrainRoutingMode;
-  settings: NexusSettings;
-  onChangeBrainMode: (mode: BrainRoutingMode) => void;
-  onSelectBrain: (brain: BrainType) => void;
 }
 
 const ALLOWED_EXTENSIONS = [
@@ -53,18 +33,11 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   onRunAsAgentTask,
   onStopGeneration,
   isStreaming,
-  activeBrain,
-  brainMode,
-  settings,
-  onChangeBrainMode,
-  onSelectBrain,
 }) => {
   const [input, setInput] = useState('');
   const [attachments, setAttachments] = useState<FileAttachment[]>([]);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-
-  const enabledToolCount = Object.values(settings.enabledTools).filter(Boolean).length;
 
   const handleFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     setUploadError(null);
@@ -85,7 +58,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
       }
 
       if (file.size > 1024 * 1024) {
-        setUploadError(`File "${file.name}" exceeds the 1 MB security limit.`);
+        setUploadError(`File "${file.name}" exceeds the 1 MB limit.`);
         continue;
       }
 
@@ -129,9 +102,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
 
     const objective =
       input.trim() ||
-      `Perform multi-step agent inspection on attached file(s): ${attachments
-        .map((a) => a.name)
-        .join(', ')}`;
+      `Inspect the attached file(s): ${attachments.map((a) => a.name).join(', ')}`;
 
     onRunAsAgentTask(objective, attachments);
     setInput('');
@@ -140,10 +111,10 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   };
 
   return (
-    <div className="px-4 pb-4 pt-2 shrink-0 z-20">
-      <div className="max-w-4xl mx-auto">
+    <div className="px-4 sm:px-8 pb-5 pt-2 shrink-0 z-20">
+      <div className="max-w-3xl mx-auto">
         {uploadError && (
-          <div className="mb-2 px-3 py-1.5 rounded-lg bg-rose-500/15 border border-rose-500/30 text-xs text-rose-200 flex items-center justify-between">
+          <div className="mb-2 px-3 py-2 rounded-xl bg-rose-500/15 border border-rose-500/30 text-xs text-rose-200 flex items-center justify-between gap-3">
             <span>{uploadError}</span>
             <button
               type="button"
@@ -155,18 +126,17 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
           </div>
         )}
 
-        {/* Glass Composer Surface */}
+        {/* Composer Surface */}
         <div className="rounded-2xl bg-[#0d1018]/85 backdrop-blur-2xl border border-white/[0.1] focus-within:border-violet-400/45 shadow-2xl transition-colors">
-          {/* Attached Files Strip */}
           {attachments.length > 0 && (
-            <div className="px-3.5 pt-3 pb-1 flex flex-wrap gap-2">
+            <div className="px-4 pt-3.5 pb-1 flex flex-wrap gap-2">
               {attachments.map((att) => (
                 <div
                   key={att.id}
-                  className="flex items-center gap-2 px-2.5 py-1 rounded-lg bg-white/[0.05] border border-white/[0.09] text-xs text-slate-200"
+                  className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-white/[0.05] border border-white/[0.09] text-xs text-slate-200"
                 >
                   <FileText className="w-3.5 h-3.5 text-cyan-400 shrink-0" />
-                  <span className="truncate max-w-[180px]">{att.name}</span>
+                  <span className="truncate max-w-[160px]">{att.name}</span>
                   <span className="text-[10px] font-mono text-slate-400 tabular-nums">
                     {(att.sizeBytes / 1024).toFixed(1)} KB
                   </span>
@@ -184,7 +154,6 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
             </div>
           )}
 
-          {/* Multiline Textarea */}
           <textarea
             value={input}
             onChange={(e) => setInput(e.target.value)}
@@ -195,14 +164,12 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
               }
             }}
             rows={Math.min(6, Math.max(2, input.split('\n').length))}
-            placeholder="Command NEXUS 5.5 — ask a question, analyze files, or dispatch a multi-step agent task... (Enter to send, Shift+Enter for newline)"
-            className="w-full px-4 pt-3.5 pb-2 bg-transparent text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none resize-none leading-relaxed"
+            placeholder="Ask anything, paste a question, or attach a file…"
+            className="w-full px-4 pt-4 pb-2 bg-transparent text-sm sm:text-[15px] text-slate-100 placeholder:text-slate-500 focus:outline-none resize-none leading-relaxed"
           />
 
-          {/* Bottom Composer Toolbar */}
-          <div className="px-3 pb-2.5 pt-1 flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.05]">
-            {/* Left Controls: Attachment, Brain Mode, Model Selector, Tool Indicator */}
-            <div className="flex items-center flex-wrap gap-1.5">
+          <div className="px-3 pb-3 pt-1 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5">
               <input
                 ref={fileInputRef}
                 type="file"
@@ -214,77 +181,25 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                title="Attach text, code, JSON, or CSV file for analysis"
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs text-slate-300 hover:text-white bg-white/[0.03] hover:bg-white/[0.07] border border-white/[0.07] transition-colors cursor-pointer"
+                title="Attach a text, code, JSON, or CSV file"
+                className="flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs text-slate-300 hover:text-white bg-white/[0.03] hover:bg-white/[0.07] border border-white/[0.07] transition-colors cursor-pointer"
               >
                 <Paperclip className="w-3.5 h-3.5 text-slate-400" />
-                <span>Attach</span>
+                <span className="hidden sm:inline">Attach</span>
               </button>
-
-              {/* Mode Selector */}
-              <button
-                type="button"
-                onClick={() => onChangeBrainMode(brainMode === 'AUTO' ? 'MANUAL' : 'AUTO')}
-                title="Switch between AUTO complexity routing and MANUAL brain lock"
-                className={`px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-colors cursor-pointer ${
-                  brainMode === 'AUTO'
-                    ? 'bg-violet-500/15 border-violet-400/30 text-violet-200'
-                    : 'bg-cyan-500/15 border-cyan-400/30 text-cyan-200'
-                }`}
-              >
-                Mode: {brainMode}
-              </button>
-
-              {/* Active Brain Toggle */}
-              <button
-                type="button"
-                onClick={() =>
-                  onSelectBrain(activeBrain === 'FLASH' ? 'REASONING' : 'FLASH')
-                }
-                title={`Current Brain: ${activeBrain}. Click to switch between FLASH (${settings.flashModelId}) and REASONING (${settings.reasoningModelId}).`}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium bg-white/[0.03] hover:bg-white/[0.07] border border-white/[0.07] text-slate-200 transition-colors cursor-pointer"
-              >
-                {activeBrain === 'FLASH' ? (
-                  <>
-                    <Zap className="w-3.5 h-3.5 text-cyan-400" />
-                    <span>FLASH</span>
-                    <span className="hidden md:inline font-mono text-[11px] text-slate-400">
-                      ({settings.flashModelId})
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <Brain className="w-3.5 h-3.5 text-violet-400" />
-                    <span>REASONING</span>
-                    <span className="hidden md:inline font-mono text-[11px] text-slate-400">
-                      ({settings.reasoningModelId})
-                    </span>
-                  </>
-                )}
-              </button>
-
-              {/* Active Tools Indicator */}
-              <div
-                title={`${enabledToolCount} verified backend tools enabled`}
-                className="hidden sm:flex items-center gap-1.5 px-2 py-1 text-[11px] text-slate-400 font-mono"
-              >
-                <Wrench className="w-3 h-3 text-emerald-400" />
-                <span>{enabledToolCount} tools ready</span>
-              </div>
             </div>
 
-            {/* Right Controls: Run as Agent Task + Send / Stop */}
             <div className="flex items-center gap-2">
               {!isStreaming && (
                 <button
                   type="button"
                   onClick={handleAgentDispatch}
                   disabled={!input.trim() && attachments.length === 0}
-                  title="Execute through the 7-phase Agent Operating Protocol (UNDERSTAND → PLAN → SELECT → EXECUTE → VERIFY → RESPOND)"
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-white/[0.04] hover:bg-violet-500/20 border border-white/[0.09] hover:border-violet-400/35 text-slate-200 disabled:opacity-40 disabled:pointer-events-none transition-all cursor-pointer"
+                  title="Let NEXUS plan and carry out this task step by step"
+                  className="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium bg-white/[0.04] hover:bg-violet-500/20 border border-white/[0.09] hover:border-violet-400/35 text-slate-200 disabled:opacity-40 disabled:pointer-events-none transition-all cursor-pointer"
                 >
                   <Workflow className="w-3.5 h-3.5 text-cyan-400" />
-                  <span>Run Agent Protocol</span>
+                  <span className="hidden sm:inline">Run as agent</span>
                 </button>
               )}
 
@@ -292,7 +207,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                 <button
                   type="button"
                   onClick={onStopGeneration}
-                  className="flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold bg-rose-500/25 hover:bg-rose-500/35 border border-rose-400/40 text-rose-100 transition-colors cursor-pointer"
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-rose-500/25 hover:bg-rose-500/35 border border-rose-400/40 text-rose-100 transition-colors cursor-pointer"
                 >
                   <Square className="w-3.5 h-3.5 fill-current" />
                   <span>Stop</span>
@@ -302,7 +217,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
                   type="button"
                   onClick={handleSubmit}
                   disabled={!input.trim() && attachments.length === 0}
-                  className="flex items-center gap-1.5 px-4 py-1.5 rounded-xl text-xs font-semibold bg-gradient-to-r from-violet-600 to-cyan-600 hover:from-violet-500 hover:to-cyan-500 text-white shadow-md disabled:opacity-40 disabled:pointer-events-none transition-all cursor-pointer"
+                  className="flex items-center gap-1.5 px-4 py-2 rounded-lg text-xs font-semibold bg-gradient-to-r from-violet-600 to-cyan-600 hover:from-violet-500 hover:to-cyan-500 text-white shadow-md disabled:opacity-40 disabled:pointer-events-none transition-all cursor-pointer"
                 >
                   <Send className="w-3.5 h-3.5" />
                   <span>Send</span>

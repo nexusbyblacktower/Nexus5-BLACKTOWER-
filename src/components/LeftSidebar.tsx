@@ -17,6 +17,7 @@ import { Conversation, ProjectWorkspace } from '../types/nexus.ts';
 
 interface LeftSidebarProps {
   collapsed: boolean;
+  overlay?: boolean;
   conversations: Conversation[];
   activeConversationId: string | null;
   searchQuery: string;
@@ -40,6 +41,7 @@ interface LeftSidebarProps {
 
 export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   collapsed,
+  overlay = false,
   conversations,
   activeConversationId,
   searchQuery,
@@ -65,11 +67,11 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
 
   if (collapsed) {
     return (
-      <aside className="w-14 border-r border-white/[0.08] bg-[#090b11]/75 backdrop-blur-2xl flex flex-col items-center py-3 gap-3 shrink-0 z-20 select-none">
+      <aside className="w-14 border-r border-white/[0.08] bg-[#090b11]/75 backdrop-blur-2xl flex flex-col items-center py-4 gap-3 shrink-0 z-20 select-none">
         <button
           type="button"
           onClick={onNewChat}
-          title="New Chat"
+          title="New chat"
           className="w-9 h-9 rounded-xl bg-violet-600/25 hover:bg-violet-600/40 border border-violet-400/30 flex items-center justify-center text-violet-200 transition-colors cursor-pointer"
         >
           <Plus className="w-4 h-4" />
@@ -80,7 +82,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         <button
           type="button"
           onClick={onOpenProjectsModal}
-          title="Projects Workspace"
+          title="Projects"
           className="w-9 h-9 rounded-lg hover:bg-white/[0.06] flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer"
         >
           <FolderKanban className="w-4 h-4" />
@@ -89,7 +91,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         <button
           type="button"
           onClick={onOpenAgentPanel}
-          title="Agent Tasks"
+          title="Agent tasks"
           className="w-9 h-9 rounded-lg hover:bg-white/[0.06] flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer"
         >
           <Workflow className="w-4 h-4" />
@@ -98,7 +100,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         <button
           type="button"
           onClick={onOpenMemoryModal}
-          title="Memory Vault"
+          title="Memory"
           className="w-9 h-9 rounded-lg hover:bg-white/[0.06] flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer"
         >
           <Database className="w-4 h-4" />
@@ -107,7 +109,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         <button
           type="button"
           onClick={onOpenToolsModal}
-          title="Tools & Connectors"
+          title="Tools"
           className="w-9 h-9 rounded-lg hover:bg-white/[0.06] flex items-center justify-center text-slate-400 hover:text-white transition-colors cursor-pointer"
         >
           <Wrench className="w-4 h-4" />
@@ -128,17 +130,21 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
   }
 
   return (
-    <aside className="w-72 border-r border-white/[0.08] bg-[#090b11]/75 backdrop-blur-2xl flex flex-col shrink-0 z-20 select-none">
+    <aside
+      className={`w-72 border-r border-white/[0.08] bg-[#090b11]/95 backdrop-blur-2xl flex flex-col shrink-0 select-none ${
+        overlay ? 'fixed top-16 bottom-0 left-0 z-40 shadow-2xl' : 'z-20'
+      }`}
+    >
       {/* New Chat + Search */}
-      <div className="p-3.5 space-y-2.5 border-b border-white/[0.07]">
+      <div className="p-4 space-y-3 border-b border-white/[0.07]">
         <button
           type="button"
           onClick={onNewChat}
-          className="w-full py-2 px-3.5 rounded-xl bg-gradient-to-r from-violet-600/30 via-violet-500/20 to-cyan-500/20 hover:from-violet-600/40 hover:to-cyan-500/30 border border-violet-400/30 text-white text-xs font-semibold flex items-center justify-between transition-all shadow-sm cursor-pointer"
+          className="w-full py-2.5 px-3.5 rounded-xl bg-gradient-to-r from-violet-600/30 via-violet-500/20 to-cyan-500/20 hover:from-violet-600/40 hover:to-cyan-500/30 border border-violet-400/30 text-white text-xs font-semibold flex items-center justify-between transition-all shadow-sm cursor-pointer"
         >
           <span className="flex items-center gap-2">
             <Plus className="w-4 h-4 text-violet-300" />
-            <span>New Session</span>
+            <span>New chat</span>
           </span>
           <span className="font-mono text-[11px] text-slate-400">⌘K</span>
         </button>
@@ -149,8 +155,8 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             type="text"
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
-            placeholder="Search conversations..."
-            className="w-full pl-8 pr-7 py-1.5 rounded-lg bg-white/[0.03] border border-white/[0.07] focus:border-violet-400/40 focus:outline-none text-xs text-slate-200 placeholder:text-slate-500"
+            placeholder="Search chats"
+            className="w-full pl-8 pr-8 py-2 rounded-lg bg-white/[0.03] border border-white/[0.07] focus:border-violet-400/40 focus:outline-none text-xs text-slate-200 placeholder:text-slate-500"
           />
           {searchQuery && (
             <button
@@ -165,9 +171,11 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
       </div>
 
       {/* Projects Filter Section */}
-      <div className="px-3.5 py-2.5 border-b border-white/[0.07]">
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="text-[11px] font-semibold text-slate-400">Projects</span>
+      <div className="px-4 py-3 border-b border-white/[0.07]">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-[11px] font-semibold tracking-wide text-slate-400 uppercase">
+            Projects
+          </span>
           <button
             type="button"
             onClick={onOpenProjectsModal}
@@ -176,50 +184,49 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             Manage
           </button>
         </div>
-        <div className="space-y-0.5 max-h-28 overflow-y-auto">
+        <div className="space-y-1 max-h-32 overflow-y-auto">
           <button
             type="button"
             onClick={() => onSelectProject(null)}
-            className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between transition-colors cursor-pointer ${
+            className={`w-full text-left px-2.5 py-2 rounded-lg text-xs flex items-center justify-between transition-colors cursor-pointer ${
               selectedProjectId === null
                 ? 'bg-white/[0.07] text-white font-medium'
                 : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.03]'
             }`}
           >
-            <span className="truncate">All Workspaces</span>
+            <span className="truncate">All workspaces</span>
           </button>
           {projects.map((proj) => (
             <button
               key={proj.id}
               type="button"
               onClick={() => onSelectProject(proj.id)}
-              className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs flex items-center justify-between gap-2 transition-colors cursor-pointer ${
+              className={`w-full text-left px-2.5 py-2 rounded-lg text-xs flex items-center justify-between gap-2 transition-colors cursor-pointer ${
                 selectedProjectId === proj.id
                   ? 'bg-violet-500/20 text-violet-100 border border-violet-500/25 font-medium'
                   : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.03]'
               }`}
             >
               <span className="truncate">{proj.name}</span>
-              <span className="text-[10px] font-mono text-slate-500 shrink-0">
-                {proj.defaultBrain}
-              </span>
             </button>
           ))}
         </div>
       </div>
 
       {/* Recent Chats List */}
-      <div className="flex-1 overflow-y-auto px-3 py-2.5 space-y-1">
-        <div className="px-1 pb-1 flex items-center justify-between">
-          <span className="text-[11px] font-semibold text-slate-400">Recent Chats</span>
+      <div className="flex-1 overflow-y-auto px-3 py-3 space-y-1">
+        <div className="px-2 pb-1.5 flex items-center justify-between">
+          <span className="text-[11px] font-semibold tracking-wide text-slate-400 uppercase">
+            Chats
+          </span>
           <span className="text-[11px] font-mono text-slate-500 tabular-nums">
             {conversations.length}
           </span>
         </div>
 
         {conversations.length === 0 ? (
-          <div className="px-2 py-6 text-center text-xs text-slate-500">
-            No conversations found. Start a new session above.
+          <div className="px-2 py-8 text-center text-xs text-slate-500">
+            No chats yet. Start a new one above.
           </div>
         ) : (
           conversations.map((conv) => {
@@ -229,7 +236,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
             return (
               <div
                 key={conv.id}
-                className={`group flex items-center justify-between gap-1.5 px-2.5 py-2 rounded-xl text-xs transition-colors ${
+                className={`group flex items-center justify-between gap-1.5 px-2.5 py-2.5 rounded-xl text-xs transition-colors ${
                   isActive
                     ? 'bg-white/[0.08] text-white border border-white/[0.1]'
                     : 'text-slate-400 hover:text-slate-200 hover:bg-white/[0.04] border border-transparent'
@@ -250,7 +257,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                         }
                       }}
                       autoFocus
-                      className="flex-1 bg-[#06070b] border border-violet-400/40 rounded px-2 py-0.5 text-xs text-white focus:outline-none"
+                      className="flex-1 bg-[#06070b] border border-violet-400/40 rounded px-2 py-1 text-xs text-white focus:outline-none"
                     />
                     <button
                       type="button"
@@ -277,23 +284,16 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                     <button
                       type="button"
                       onClick={() => onSelectConversation(conv.id)}
-                      className="flex-1 flex items-center gap-2 text-left min-w-0 cursor-pointer"
+                      className="flex-1 flex items-center gap-2.5 text-left min-w-0 cursor-pointer"
                     >
                       <MessageSquare className="w-3.5 h-3.5 shrink-0 text-slate-500" />
-                      <div className="truncate">
-                        <div className="truncate font-medium">{conv.title}</div>
-                        <div className="text-[10px] text-slate-500 font-mono flex items-center gap-1">
-                          <span>{conv.selectedBrain}</span>
-                          <span>·</span>
-                          <span>{conv.messages.length} msg</span>
-                        </div>
-                      </div>
+                      <span className="truncate font-medium">{conv.title}</span>
                     </button>
 
                     <div className="hidden group-hover:flex items-center gap-0.5 shrink-0">
                       <button
                         type="button"
-                        title="Rename conversation"
+                        title="Rename chat"
                         onClick={() => {
                           setEditingId(conv.id);
                           setEditingTitle(conv.title);
@@ -304,7 +304,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
                       </button>
                       <button
                         type="button"
-                        title="Delete conversation"
+                        title="Delete chat"
                         onClick={() => onDeleteConversation(conv.id)}
                         className="p-1 rounded hover:bg-rose-500/20 text-slate-400 hover:text-rose-300 cursor-pointer"
                       >
@@ -319,16 +319,16 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         )}
       </div>
 
-      {/* Bottom Platform Modules Navigation */}
+      {/* Bottom Navigation */}
       <div className="p-3 border-t border-white/[0.08] space-y-1 bg-[#07080d]/60">
         <button
           type="button"
           onClick={onOpenAgentPanel}
-          className="w-full px-2.5 py-2 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-white/[0.05] flex items-center justify-between transition-colors cursor-pointer"
+          className="w-full px-2.5 py-2.5 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-white/[0.05] flex items-center justify-between transition-colors cursor-pointer"
         >
           <span className="flex items-center gap-2.5">
             <Workflow className="w-3.5 h-3.5 text-cyan-400" />
-            <span>Agent Tasks</span>
+            <span>Agent tasks</span>
           </span>
           <span className="font-mono text-[11px] text-slate-500 tabular-nums">{tasksCount}</span>
         </button>
@@ -336,11 +336,11 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         <button
           type="button"
           onClick={onOpenMemoryModal}
-          className="w-full px-2.5 py-2 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-white/[0.05] flex items-center justify-between transition-colors cursor-pointer"
+          className="w-full px-2.5 py-2.5 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-white/[0.05] flex items-center justify-between transition-colors cursor-pointer"
         >
           <span className="flex items-center gap-2.5">
             <Database className="w-3.5 h-3.5 text-violet-400" />
-            <span>Memory Vault</span>
+            <span>Memory</span>
           </span>
           <span className="font-mono text-[11px] text-slate-500 tabular-nums">{memoryCount}</span>
         </button>
@@ -348,11 +348,11 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         <button
           type="button"
           onClick={onOpenToolsModal}
-          className="w-full px-2.5 py-2 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-white/[0.05] flex items-center justify-between transition-colors cursor-pointer"
+          className="w-full px-2.5 py-2.5 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-white/[0.05] flex items-center justify-between transition-colors cursor-pointer"
         >
           <span className="flex items-center gap-2.5">
             <Wrench className="w-3.5 h-3.5 text-emerald-400" />
-            <span>Tools & Connectors</span>
+            <span>Tools</span>
           </span>
           <span className="font-mono text-[11px] text-slate-500 tabular-nums">{toolsCount}</span>
         </button>
@@ -360,7 +360,7 @@ export const LeftSidebar: React.FC<LeftSidebarProps> = ({
         <button
           type="button"
           onClick={onOpenSettingsModal}
-          className="w-full px-2.5 py-2 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-white/[0.05] flex items-center justify-between transition-colors cursor-pointer"
+          className="w-full px-2.5 py-2.5 rounded-lg text-xs text-slate-300 hover:text-white hover:bg-white/[0.05] flex items-center justify-between transition-colors cursor-pointer"
         >
           <span className="flex items-center gap-2.5">
             <Settings className="w-3.5 h-3.5 text-slate-400" />
