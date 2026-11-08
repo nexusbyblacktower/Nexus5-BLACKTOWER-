@@ -1,4 +1,12 @@
-import { BrainType, MemoryEntry, ProjectWorkspace } from '../src/types/nexus.ts';
+import {
+  AgentPersona,
+  AgentTone,
+  AgentVerbosity,
+  BrainType,
+  MemoryEntry,
+  ProjectWorkspace,
+  ReplyPattern,
+} from '../src/types/nexus.ts';
 
 export const NEXUS_BASE_SYSTEM_PROMPT = `NEXUS 5.5 | BLACKTOWER Dual-Brain Edition
 
@@ -51,10 +59,50 @@ export function wrapUntrustedContent(sourceLabel: string, rawContent: string): s
   ].join('\n');
 }
 
+const REPLY_PATTERN_TEXT: Record<ReplyPattern, string> = {
+  direct: 'Answer first in one or two sentences, then add only the detail that changes the decision.',
+  structured: 'Lead with the answer, then short labelled sections with bullets (Answer / Why / Next step).',
+  conversational: 'Reply like a knowledgeable friend: flowing prose, natural transitions, no headings.',
+  step_by_step: 'Lay out numbered steps in order, one action per step, and say what to check after each.',
+};
+
+const TONE_TEXT: Record<AgentTone, string> = {
+  friendly: 'Friendly and encouraging — contractions, plain words, no jargon.',
+  warm: 'Warm and personable with light empathy, still precise and honest.',
+  neutral: 'Neutral and matter-of-fact — no filler, no praise, no hedging.',
+  formal: 'Formal and precise — complete sentences, no slang.',
+  playful: 'Playful and light, with occasional humour that never hides the facts.',
+};
+
+const VERBOSITY_TEXT: Record<AgentVerbosity, string> = {
+  concise: 'Keep answers tight — usually under 150 words unless the task genuinely needs more.',
+  balanced: 'Give the answer plus the reasoning needed to trust it, in a few short paragraphs.',
+  detailed: 'Explain thoroughly: reasoning, alternatives considered, assumptions, and an example.',
+};
+
+export function buildPersonaSection(persona?: AgentPersona | null): string {
+  if (!persona) return '';
+  const lines = [
+    '\n[AGENT PERSONALITY & STYLE — the user chose this; it outranks the default style above]',
+    `Reply pattern: ${REPLY_PATTERN_TEXT[persona.replyPattern] || REPLY_PATTERN_TEXT.structured}`,
+    `Tone: ${TONE_TEXT[persona.tone] || TONE_TEXT.warm}`,
+    `Length: ${VERBOSITY_TEXT[persona.verbosity] || VERBOSITY_TEXT.balanced}`,
+    'Always make your reasoning legible: state the assumptions you made, the steps you took, and how you checked the answer. If you are not certain, say what is uncertain and what would confirm it instead of guessing.',
+  ];
+  if (persona.personality?.trim()) {
+    lines.push(`Personality brief from the user: ${persona.personality.trim().slice(0, 1200)}`);
+  }
+  if (persona.customInstructions?.trim()) {
+    lines.push(`Extra instructions from the user: ${persona.customInstructions.trim().slice(0, 2000)}`);
+  }
+  return lines.join('\n');
+}
+
 export function buildContextualSystemPrompt(params: {
   activeBrain: BrainType;
   executedModelId: string;
   project?: ProjectWorkspace | null;
+  persona?: AgentPersona | null;
   memories?: MemoryEntry[];
   toolOutputsSummary?: string;
 }): string {
@@ -64,6 +112,9 @@ export function buildContextualSystemPrompt(params: {
     `\n[ACTIVE RUNTIME CONTEXT]\nActive Brain: ${params.activeBrain} BRAIN\nExecuted Model ID: ${params.executedModelId}\nNever claim a different model performed this work.`
   );
 
+  const personaSection = buildPersonaSection(params.persona);
+  if (personaSection) sections.push(personaSection);
+
   if (params.project) {
     sections.push(
       `\n[ACTIVE PROJECT WORKSPACE: ${params.project.name}]\nDescription: ${params.project.description}\nProject Directives: ${params.project.systemInstructions}`
@@ -71,24 +122,22 @@ export function buildContextualSystemPrompt(params: {
   }
 
   if (params.memories && params.memories.length > 0) {
-    const userMems = params.memories.filter((m) => m.category === 'user_memory' && m.userApproved);
-    const projMems = params.memories.filter((m) => m.category === 'project_memory' && m.userApproved);
-    const ctxMems = params.memories.filter(
-      (m) => m.category === 'conversation_context' || m.category === 'temporary_task_context'
-    );
+    const longTerm = params.memories.filter((m) => m.layer === 'long_term' && m.userApproved);
+    const midTerm = params.memories.filter((m) => m.layer === 'mid_term' && m.userApproved);
+    const shortTerm = params.memories.filter((m) => m.layer === 'short_term' && m.userApproved);
 
     const memLines: string[] = ['\n[AUTHORIZED NEXUS MEMORY VAULT]'];
-    if (userMems.length > 0) {
-      memLines.push('User Preferences & Context:');
-      userMems.forEach((m) => memLines.push(`- ${m.title}: ${m.content}`));
+    if (longTerm.length > 0) {
+      memLines.push('Long-term — who the user is and how they want to be treated:');
+      longTerm.forEach((m) => memLines.push(`- ${m.title}: ${m.content}`));
     }
-    if (projMems.length > 0) {
-      memLines.push('Project Knowledge:');
-      projMems.forEach((m) => memLines.push(`- ${m.title}: ${m.content}`));
+    if (midTerm.length > 0) {
+      memLines.push('Mid-term — project knowledge and decisions:');
+      midTerm.forEach((m) => memLines.push(`- ${m.title}: ${m.content}`));
     }
-    if (ctxMems.length > 0) {
-      memLines.push('Active Task Context:');
-      ctxMems.forEach((m) => memLines.push(`- ${m.title}: ${m.content}`));
+    if (shortTerm.length > 0) {
+      memLines.push('Short-term — active session context:');
+      shortTerm.forEach((m) => memLines.push(`- ${m.title}: ${m.content}`));
     }
     sections.push(memLines.join('\n'));
   }

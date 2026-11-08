@@ -35,11 +35,18 @@ const FALLBACK_SETTINGS: NexusSettings = {
   brainMode: 'AUTO',
   flashModelId: BRAIN_MODELS.FLASH,
   reasoningModelId: BRAIN_MODELS.REASONING,
-  fallbackModelId: 'openai/gpt-4o-mini',
+  fallbackModelId: 'openai/gpt-4.1-mini',
   enableVerifiedFallback: true,
   temperature: 0.4,
   maxOutputTokens: 2048,
   streamingEnabled: true,
+  agentPersona: {
+    replyPattern: 'structured',
+    tone: 'warm',
+    verbosity: 'balanced',
+    personality: '',
+    customInstructions: '',
+  },
   memoryPolicy: {
     injectUserMemory: true,
     injectProjectMemory: true,
@@ -539,6 +546,7 @@ export default function App() {
         onClose={() => setMemoryModalOpen(false)}
         memories={memories}
         projects={projects}
+        storeStatus={status?.gateway.memoryStore || null}
         onCreateMemory={async (input) => {
           const created = await apiClient.createMemory(input);
           setMemories((prev) => [created, ...prev]);
@@ -610,6 +618,14 @@ export default function App() {
           setSettings(reset);
           setActiveBrain(reset.defaultBrain);
           setBrainMode(reset.brainMode);
+        }}
+        onSaveApiKey={async (apiKey) => {
+          const { gateway } = await apiClient.saveOpenRouterKey(apiKey);
+          setStatus((prev) => (prev ? { ...prev, gateway } : prev));
+        }}
+        onClearApiKey={async () => {
+          const { gateway } = await apiClient.clearOpenRouterKey();
+          setStatus((prev) => (prev ? { ...prev, gateway } : prev));
         }}
       />
     </div>

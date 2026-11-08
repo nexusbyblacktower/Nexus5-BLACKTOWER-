@@ -10,6 +10,8 @@ import {
   MCPConnectorAdapter,
   MemoryCategory,
   MemoryEntry,
+  MemoryLayer,
+  MemoryStoreStatus,
   NexusSettings,
   ProjectWorkspace,
   ToolDefinition,
@@ -75,6 +77,16 @@ export const apiClient = {
     fetchJson<NexusSettings>('/api/settings/reset', {
       method: 'POST',
     }),
+  saveOpenRouterKey: (apiKey: string) =>
+    fetchJson<{ gateway: GatewayStatus; hint: string }>('/api/settings/openrouter-key', {
+      method: 'PUT',
+      body: JSON.stringify({ apiKey }),
+    }),
+  clearOpenRouterKey: () =>
+    fetchJson<{ gateway: GatewayStatus }>('/api/settings/openrouter-key', {
+      method: 'DELETE',
+    }),
+  getMemoryStatus: () => fetchJson<MemoryStoreStatus>('/api/memory/status'),
 
   listProjects: () => fetchJson<ProjectWorkspace[]>('/api/projects'),
   createProject: (input: {
@@ -218,18 +230,21 @@ export const apiClient = {
 
   listMemories: (params?: {
     category?: MemoryCategory;
+    layer?: MemoryLayer;
     projectId?: string;
     search?: string;
   }) => {
     const qs = new URLSearchParams();
     if (params?.category) qs.set('category', params.category);
+    if (params?.layer) qs.set('layer', params.layer);
     if (params?.projectId) qs.set('projectId', params.projectId);
     if (params?.search) qs.set('search', params.search);
     const queryStr = qs.toString() ? `?${qs.toString()}` : '';
     return fetchJson<MemoryEntry[]>(`/api/memories${queryStr}`);
   },
   createMemory: (input: {
-    category: MemoryCategory;
+    category?: MemoryCategory;
+    layer?: MemoryLayer;
     title: string;
     content: string;
     projectId?: string | null;
@@ -244,7 +259,10 @@ export const apiClient = {
   updateMemory: (
     id: string,
     updates: Partial<
-      Pick<MemoryEntry, 'title' | 'content' | 'category' | 'tags' | 'userApproved' | 'projectId'>
+      Pick<
+        MemoryEntry,
+        'title' | 'content' | 'layer' | 'category' | 'tags' | 'userApproved' | 'projectId'
+      >
     >
   ) =>
     fetchJson<MemoryEntry>(`/api/memories/${id}`, {

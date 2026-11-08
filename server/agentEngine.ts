@@ -272,7 +272,7 @@ export class AgentEngine {
 
     const settings = settingsService.getSettings();
     const project = conversationService.getProject(task.projectId);
-    const memories = memoryService.getRelevantContextMemories({
+    const memories = await memoryService.getRelevantContextMemories({
       projectId: task.projectId,
       conversationId: task.conversationId,
       includeUserMemory: settings.memoryPolicy.injectUserMemory,
@@ -290,6 +290,7 @@ export class AgentEngine {
       activeBrain: task.routingDecision.selectedBrain,
       executedModelId: task.routingDecision.executedModelId,
       project,
+      persona: settings.agentPersona,
       memories,
       toolOutputsSummary: toolOutputsFormatted,
     });

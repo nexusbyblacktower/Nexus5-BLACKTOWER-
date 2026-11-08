@@ -2,6 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 import { BrainRoutingDecision, GatewayStatus } from '../src/types/nexus.ts';
 import { sanitizeErrorMessage } from './authService.ts';
 import { settingsService } from './settingsService.ts';
+import { memoryService } from './memoryService.ts';
 
 const OPENROUTER_API_URL = 'https://openrouter.ai/api/v1/chat/completions';
 
@@ -18,15 +19,15 @@ export interface StreamCompletionCallbacks {
 }
 
 export class OpenRouterClient {
-  public getGatewayStatus(): GatewayStatus {
+  public async getGatewayStatus(): Promise<GatewayStatus> {
     const settings = settingsService.getSettings();
-    const openRouterKey = process.env.OPENROUTER_API_KEY?.trim();
+    const credential = settingsService.getOpenRouterApiKey();
     const geminiKey = process.env.GEMINI_API_KEY?.trim();
 
     return {
-      openRouterConfigured: Boolean(
-        openRouterKey && openRouterKey !== 'YOUR_OPENROUTER_API_KEY'
-      ),
+      openRouterConfigured: Boolean(credential.key),
+      openRouterKeySource: credential.source,
+      openRouterKeyHint: credential.hint,
       openRouterEndpoint: OPENROUTER_API_URL,
       geminiFallbackAvailable: Boolean(geminiKey && geminiKey !== 'MY_GEMINI_API_KEY'),
       configuredModels: {
@@ -34,11 +35,7 @@ export class OpenRouterClient {
         reasoning: settings.reasoningModelId,
         fallback: settings.fallbackModelId,
       },
-      persistenceLayer: {
-        engine: 'Server-Side JSON Document Store',
-        storagePath: '/data/nexus_conversations.json',
-        persistentAcrossRestarts: true,
-      },
+      memoryStore: await memoryService.getStatus(),
     };
   }
 
@@ -56,10 +53,8 @@ export class OpenRouterClient {
     callbacks: StreamCompletionCallbacks;
   }): Promise<void> {
     const settings = settingsService.getSettings();
-    const openRouterKey = process.env.OPENROUTER_API_KEY?.trim();
-    const hasOpenRouterKey = Boolean(
-      openRouterKey && openRouterKey !== 'YOUR_OPENROUTER_API_KEY'
-    );
+    const openRouterKey = settingsService.getOpenRouterApiKey().key;
+    const hasOpenRouterKey = Boolean(openRouterKey);
 
     const temperature = params.temperature ?? settings.temperature;
     const maxTokens = params.maxTokens ?? settings.maxOutputTokens;
@@ -148,7 +143,7 @@ export class OpenRouterClient {
       currentDecision.executedModelId = `${fallbackGeminiModel} (Verified Fallback Gateway)`;
       currentDecision.fallbackReason = hasOpenRouterKey
         ? `Requested OpenRouter model "${currentDecision.requestedModelId}" was unavailable. Executed via verified server-side fallback (${fallbackGeminiModel}).`
-        : `OPENROUTER_API_KEY is not set in server environment. Executed via verified server-side fallback (${fallbackGeminiModel}) while preserving ${currentDecision.selectedBrain} routing context.`;
+        : `No OpenRouter key is configured. Executed via the verified server-side fallback (${fallbackGeminiModel}) while preserving ${currentDecision.selectedBrain} routing context.`;
 
       params.callbacks.onMetadata?.(currentDecision);
 
@@ -199,7 +194,7 @@ export class OpenRouterClient {
 
     // 4. Neither OpenRouter nor Fallback is available / permitted
     params.callbacks.onError(
-      `OPENROUTER_API_KEY is not configured on the server (and Verified Fallback is disabled). Add OPENROUTER_API_KEY in the Secrets panel to invoke "${currentDecision.requestedModelId}" via https://openrouter.ai/api/v1/chat/completions, or enable Verified Fallback in Settings.`,
+      'The assistant is not connected yet. Open Settings and add your OpenRouter API key to start chatting.',
       currentDecision
     );
   }

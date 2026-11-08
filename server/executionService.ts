@@ -302,7 +302,7 @@ export class ExecutionService {
 
       case 'workspace_memory_lookup': {
         const query = String(args.query || '');
-        const matches = memoryService.listMemories({ search: query });
+        const matches = await memoryService.listMemories({ search: query });
         return JSON.stringify(
           {
             query,

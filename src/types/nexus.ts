@@ -1,9 +1,14 @@
 export type BrainType = 'FLASH' | 'REASONING';
 export type BrainRoutingMode = 'AUTO' | 'MANUAL';
 
+/**
+ * Default OpenRouter model IDs.
+ * REASONING is tuned for deep, explainable reasoning and clear teaching.
+ * FLASH is the low-latency conversational model.
+ */
 export const BRAIN_MODELS = {
-  FLASH: 'deepseek/deepseek-v4.1-flash-1017',
-  REASONING: 'anthropic/claude-sonnet-5.5',
+  FLASH: 'google/gemini-2.5-flash',
+  REASONING: 'anthropic/claude-sonnet-4.5',
 } as const;
 
 export interface BrainRoutingDecision {
@@ -75,8 +80,52 @@ export type MemoryCategory =
   | 'conversation_context'
   | 'temporary_task_context';
 
+/** Three memory layers: short term (this session), mid term (project), long term (you). */
+export type MemoryLayer = 'short_term' | 'mid_term' | 'long_term';
+
+export const MEMORY_LAYERS: {
+  id: MemoryLayer;
+  label: string;
+  description: string;
+  categories: MemoryCategory[];
+}[] = [
+  {
+    id: 'short_term',
+    label: 'Short-term',
+    description: 'Working context for the active session. Fades once the conversation ends.',
+    categories: ['conversation_context', 'temporary_task_context'],
+  },
+  {
+    id: 'mid_term',
+    label: 'Mid-term',
+    description: 'Project knowledge — decisions and constraints that stay with one project.',
+    categories: ['project_memory'],
+  },
+  {
+    id: 'long_term',
+    label: 'Long-term',
+    description: 'Durable facts about you: who you are, how you like to be spoken to.',
+    categories: ['user_memory'],
+  },
+];
+
+export function layerForCategory(category: MemoryCategory): MemoryLayer {
+  if (category === 'user_memory') return 'long_term';
+  if (category === 'project_memory') return 'mid_term';
+  return 'short_term';
+}
+
+export function categoryForLayer(layer: MemoryLayer): MemoryCategory {
+  if (layer === 'long_term') return 'user_memory';
+  if (layer === 'mid_term') return 'project_memory';
+  return 'conversation_context';
+}
+
 export interface MemoryEntry {
   id: string;
+  /** Owning user. Memory is never shared across users. */
+  userId: string;
+  layer: MemoryLayer;
   category: MemoryCategory;
   title: string;
   content: string;
@@ -86,6 +135,15 @@ export interface MemoryEntry {
   userApproved: boolean;
   createdAt: string;
   updatedAt: string;
+}
+
+export type MemoryStoreState = 'ready' | 'not_configured' | 'schema_missing' | 'unreachable';
+
+export interface MemoryStoreStatus {
+  provider: 'supabase';
+  state: MemoryStoreState;
+  encrypted: boolean;
+  detail?: string;
 }
 
 export interface ProjectWorkspace {
@@ -165,6 +223,21 @@ export interface MCPConnectorAdapter {
   description: string;
 }
 
+export type ReplyPattern = 'direct' | 'structured' | 'conversational' | 'step_by_step';
+export type AgentTone = 'friendly' | 'warm' | 'neutral' | 'formal' | 'playful';
+export type AgentVerbosity = 'concise' | 'balanced' | 'detailed';
+
+/** How the agent answers, and how it sounds while doing it. */
+export interface AgentPersona {
+  replyPattern: ReplyPattern;
+  tone: AgentTone;
+  verbosity: AgentVerbosity;
+  /** Free-form personality brief written by the user. */
+  personality: string;
+  /** Free-form extra instructions (formatting rules, catchphrases, do-nots). */
+  customInstructions: string;
+}
+
 export interface NexusSettings {
   defaultBrain: BrainType;
   brainMode: BrainRoutingMode;
@@ -175,6 +248,7 @@ export interface NexusSettings {
   temperature: number;
   maxOutputTokens: number;
   streamingEnabled: boolean;
+  agentPersona: AgentPersona;
   memoryPolicy: {
     injectUserMemory: boolean;
     injectProjectMemory: boolean;
@@ -195,6 +269,10 @@ export interface NexusSettings {
 
 export interface GatewayStatus {
   openRouterConfigured: boolean;
+  /** Where the working key came from: the user's own key, or the server environment. */
+  openRouterKeySource: 'user' | 'environment' | 'none';
+  /** Safe display hint (e.g. "••••4821"). Never the key itself. */
+  openRouterKeyHint?: string;
   openRouterEndpoint: string;
   geminiFallbackAvailable: boolean;
   configuredModels: {
@@ -202,9 +280,5 @@ export interface GatewayStatus {
     reasoning: string;
     fallback: string;
   };
-  persistenceLayer: {
-    engine: string;
-    storagePath: string;
-    persistentAcrossRestarts: boolean;
-  };
+  memoryStore: MemoryStoreStatus;
 }

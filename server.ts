@@ -24,8 +24,18 @@ import {
   ChatMessage,
   FileAttachment,
   MemoryCategory,
+  MemoryLayer,
   ToolExecutionRecord,
 } from './src/types/nexus.ts';
+import { MemoryStoreError } from './server/supabaseMemoryStore.ts';
+
+/** Memory storage problems are reported as a friendly, actionable message. */
+function memoryFailure(res: Response, err: unknown) {
+  if (err instanceof MemoryStoreError) {
+    return res.status(503).json({ error: err.message, code: err.code });
+  }
+  return res.status(500).json({ error: sanitizeErrorMessage(err) });
+}
 
 async function startServer() {
   const app = express();
@@ -36,9 +46,9 @@ async function startServer() {
   app.use('/api', rateLimitMiddleware(120));
 
   // 1. System & Gateway Status + Operator Profile
-  app.get('/api/status', (_req: Request, res: Response) => {
+  app.get('/api/status', async (_req: Request, res: Response) => {
     res.json({
-      gateway: openRouterClient.getGatewayStatus(),
+      gateway: await openRouterClient.getGatewayStatus(),
       operator: getOperatorProfile(),
       settings: settingsService.getSettings(),
     });
@@ -61,6 +71,25 @@ async function startServer() {
   app.post('/api/settings/reset', (_req: Request, res: Response) => {
     const reset = settingsService.resetSettings();
     res.json(reset);
+  });
+
+  // The user's own OpenRouter key. Never returned to the browser.
+  app.put('/api/settings/openrouter-key', async (req: Request, res: Response) => {
+    try {
+      const { apiKey } = (req.body || {}) as { apiKey?: string };
+      if (!apiKey || typeof apiKey !== 'string') {
+        return res.status(400).json({ error: 'Enter your OpenRouter API key.' });
+      }
+      const { hint } = await settingsService.setOpenRouterApiKey(apiKey);
+      return res.json({ gateway: await openRouterClient.getGatewayStatus(), hint });
+    } catch (err) {
+      return res.status(400).json({ error: sanitizeErrorMessage(err) });
+    }
+  });
+
+  app.delete('/api/settings/openrouter-key', async (_req: Request, res: Response) => {
+    settingsService.clearOpenRouterApiKey();
+    res.json({ gateway: await openRouterClient.getGatewayStatus() });
   });
 
   // 3. Projects Workspace Endpoints
@@ -259,12 +288,17 @@ async function startServer() {
       // Build contextual system prompt with Project + Memory + Sanitized Tool Outputs
       const settings = settingsService.getSettings();
       const project = conversationService.getProject(conv.projectId);
-      const memories = memoryService.getRelevantContextMemories({
-        projectId: conv.projectId,
-        conversationId: conv.id,
-        includeUserMemory: settings.memoryPolicy.injectUserMemory,
-        includeProjectMemory: settings.memoryPolicy.injectProjectMemory,
-      });
+      const memories = await memoryService
+        .getRelevantContextMemories({
+          projectId: conv.projectId,
+          conversationId: conv.id,
+          includeUserMemory: settings.memoryPolicy.injectUserMemory,
+          includeProjectMemory: settings.memoryPolicy.injectProjectMemory,
+        })
+        .catch((err) => {
+          console.error('Memory unavailable for this turn:', err);
+          return [];
+        });
 
       const toolOutputsSummary =
         executedTools.length > 0
@@ -280,6 +314,7 @@ async function startServer() {
         activeBrain: decision.selectedBrain,
         executedModelId: decision.executedModelId,
         project,
+        persona: settings.agentPersona,
         memories,
         toolOutputsSummary,
       });
@@ -335,7 +370,7 @@ async function startServer() {
               id: `msg-err-${Date.now()}`,
               conversationId: conv!.id,
               role: 'assistant',
-              content: `**Gateway Execution Alert**\n\n${errMsg}`,
+              content: `**I couldn't reach the assistant.**\n\n${errMsg}`,
               createdAt: new Date().toISOString(),
               routingDecision: finalDecision,
               toolExecutions: executedTools.length > 0 ? executedTools : undefined,
@@ -362,41 +397,63 @@ async function startServer() {
     }
   });
 
-  // 6. Memory Vault Endpoints
-  app.get('/api/memories', (req: Request, res: Response) => {
-    const category = req.query.category as MemoryCategory | undefined;
-    const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
-    const search = typeof req.query.search === 'string' ? req.query.search : undefined;
-    res.json(memoryService.listMemories({ category, projectId, search }));
+  // 6. Memory Vault Endpoints (Supabase-backed, encrypted at rest)
+  app.get('/api/memory/status', async (_req: Request, res: Response) => {
+    res.json(await memoryService.getStatus());
   });
 
-  app.post('/api/memories', (req: Request, res: Response) => {
-    const { category, title, content, projectId, conversationId, tags, userApproved } =
-      req.body || {};
-    if (!title || !content || !category) {
-      return res.status(400).json({ error: 'Category, title, and content are required.' });
+  app.get('/api/memories', async (req: Request, res: Response) => {
+    try {
+      const category = req.query.category as MemoryCategory | undefined;
+      const layer = req.query.layer as MemoryLayer | undefined;
+      const projectId = typeof req.query.projectId === 'string' ? req.query.projectId : undefined;
+      const search = typeof req.query.search === 'string' ? req.query.search : undefined;
+      res.json(await memoryService.listMemories({ category, layer, projectId, search }));
+    } catch (err) {
+      return memoryFailure(res, err);
     }
-    const entry = memoryService.createMemory({
-      category,
-      title,
-      content,
-      projectId,
-      conversationId,
-      tags: Array.isArray(tags) ? tags : [],
-      userApproved: userApproved ?? true,
-    });
-    return res.status(201).json(entry);
   });
 
-  app.put('/api/memories/:id', (req: Request, res: Response) => {
-    const updated = memoryService.updateMemory(req.params.id, req.body || {});
-    if (!updated) return res.status(404).json({ error: 'Memory entry not found.' });
-    return res.json(updated);
+  app.post('/api/memories', async (req: Request, res: Response) => {
+    try {
+      const { category, layer, title, content, projectId, conversationId, tags, userApproved } =
+        req.body || {};
+      if (!title || !content || (!category && !layer)) {
+        return res.status(400).json({ error: 'A memory layer, title, and content are required.' });
+      }
+      const entry = await memoryService.createMemory({
+        category,
+        layer,
+        title,
+        content,
+        projectId,
+        conversationId,
+        tags: Array.isArray(tags) ? tags : [],
+        userApproved: userApproved ?? true,
+      });
+      return res.status(201).json(entry);
+    } catch (err) {
+      return memoryFailure(res, err);
+    }
   });
 
-  app.delete('/api/memories/:id', (req: Request, res: Response) => {
-    const deleted = memoryService.deleteMemory(req.params.id);
-    res.json({ deleted });
+  app.put('/api/memories/:id', async (req: Request, res: Response) => {
+    try {
+      const updated = await memoryService.updateMemory(req.params.id, req.body || {});
+      if (!updated) return res.status(404).json({ error: 'Memory entry not found.' });
+      return res.json(updated);
+    } catch (err) {
+      return memoryFailure(res, err);
+    }
+  });
+
+  app.delete('/api/memories/:id', async (req: Request, res: Response) => {
+    try {
+      const deleted = await memoryService.deleteMemory(req.params.id);
+      res.json({ deleted });
+    } catch (err) {
+      return memoryFailure(res, err);
+    }
   });
 
   // 7. Tools & MCP Connectors Endpoints
